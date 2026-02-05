@@ -1,0 +1,25 @@
+[project]
+name = "cosmo"
+version = "0.1.0"
+description = "COSMO conversion tools (OpenLABEL -> OSI/MCAP + Omega-Prime CSV) with GUI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "pandas",
+  "pillow",
+  "matplotlib",
+]
+
+[project.optional-dependencies]
+gui = ["PyQt5>=5.15"]
+gui-fallback = ["PySide6", "PyQt6"]
+mcap = ["betterosi"]          # optional in converter [2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/convert_openlabel_to_omega.py)
+plot = ["omega-prime", "altair"]  # optional in GUI [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/cosmo_gui_v4.py)
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+cosmo-gui = "cosmo.cli.gui:main"
+cosmo-convert = "cosmo.cli.convert:main"
+cosmo-calibrate = "cosmo.cli.calibrate:main"
+``
