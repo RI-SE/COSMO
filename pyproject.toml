@@ -38,8 +38,18 @@ include = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
-extend-select = ["I", "F", "E", "W"]
 
 [tool.ruff.lint]
-ignore = ["E501"]
+extend-select = ["I", "F", "E", "W"]
+
+ignore = [
+  "E501",  # line too long
+  "E701",  # multiple statements on one line (colon)
+  "E702",  # multiple statements on one line (semicolon)
+]
+
+exclude = [
+  "scripts/",
+  "src/cosmo/gui_old.py",
+  "src/cosmo/gui_old/",
+]
