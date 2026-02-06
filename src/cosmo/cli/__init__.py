@@ -1,1 +1,3 @@
-# Package marker for cosmo.cli
+
+# src/cosmo/cli/__init__.py
+"""CLI package for COSMO."""

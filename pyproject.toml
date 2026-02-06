@@ -19,7 +19,9 @@ plot = ["omega-prime", "altair"]  # optional in GUI [1](https://risecloud-my.sha
 dev = ["pytest", "ruff"]
 
 [project.scripts]
+cosmo = "cosmo.cli.main:main"
+
+# Keep these if you want backwards compatibility:
 cosmo-gui = "cosmo.cli.gui:main"
 cosmo-convert = "cosmo.cli.convert:main"
 cosmo-calibrate = "cosmo.cli.calibrate:main"
-``
