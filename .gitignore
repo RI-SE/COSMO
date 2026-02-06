@@ -51,7 +51,7 @@ output/
 **/output/
 
 # Add any other common generated dirs here if they exist in your workflow
-# runs/
+runs/
 # artifacts/
 # .cosmo_cache/
 
