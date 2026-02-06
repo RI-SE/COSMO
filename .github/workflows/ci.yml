@@ -5,30 +5,38 @@ on:
   pull_request:
 
 jobs:
-  smoke:
+  test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install minimal test dependencies
+      - name: Install package + dev extras
         run: |
           python -m pip install --upgrade pip
-          # Minimal deps for the two CLI scripts and tests:
-          python -m pip install pytest numpy pandas pillow matplotlib
+          # Editable install with dev extras (pytest, ruff, pre-commit)
+          python -m pip install -e .[dev]
 
-      - name: Run smoke tests
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Run tests
         env:
           MPLBACKEND: Agg
+        run: pytest -q
+
+      - name: Build wheel/sdist
         run: |
-          pytest -q
+          python -m pip install build
+          python -m build
+          ls -la dist
