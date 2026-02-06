@@ -40,3 +40,6 @@ include = [
 line-length = 100
 target-version = "py310"
 extend-select = ["I", "F", "E", "W"]
+
+[tool.ruff.lint]
+ignore = ["E501"]
