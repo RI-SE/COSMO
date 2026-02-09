@@ -30,7 +30,6 @@ cosmo-calibrate = "cosmo.cli.calibrate:main"
 include = [
   "src/cosmo/**/*.py",
   "src/cosmo/schemas/**/*",
-  "src/cosmo/assets/**/*",
 ]
 
 # ✅ Required for src-layout
@@ -40,7 +39,6 @@ packages = ["src/cosmo"]
 # ✅ Strongly recommended for non-python files
 [tool.hatch.build.targets.wheel.force-include]
 "src/cosmo/schemas" = "cosmo/schemas"
- "src/cosmo/assets"  = "cosmo/assets"
 
 
 [tool.ruff]
