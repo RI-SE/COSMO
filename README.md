@@ -459,6 +459,8 @@ The GUI wraps the conversion script and also provides a calibration helper tab. 
 conda env create -f environment.yml
 conda activate cosmo
 
+---
+
 ## License
 
 ORBIT is licensed under the [GNU General Public License v3.0 (GPL-3.0)](LICENSE).
