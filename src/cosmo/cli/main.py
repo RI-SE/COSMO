@@ -2,6 +2,8 @@
 cosmo.cli.main
 
 Single entrypoint for the COSMO tool:
+
+  cosmo                # defaults to GUI (with help fallback if GUI can't start)
   cosmo convert ...
   cosmo calibrate ...
   cosmo gui
@@ -11,10 +13,10 @@ This wraps the existing thin command modules:
 - cosmo.cli.calibrate
 - cosmo.cli.gui
 """
-
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from importlib import metadata
 
@@ -26,6 +28,7 @@ def _get_version() -> str:
     except Exception:
         try:
             from cosmo.__version import __version__  # type: ignore
+
             return str(__version__)
         except Exception:
             return "0.0.0"
@@ -34,7 +37,7 @@ def _get_version() -> str:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="cosmo",
-        description="COSMO conversion tools (OpenLABEL → OSI/MCAP + Omega-Prime CSV) with GUI",
+        description="COSMO conversion tools (OpenLABEL -> OSI/MCAP + Omega-Prime CSV) with GUI",
     )
     ap.add_argument(
         "--version",
@@ -46,10 +49,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     # We intentionally do not duplicate all flags here;
     # each subcommand owns its argument parsing.
-    p_convert = sub.add_parser("convert", help="Convert OpenLABEL to Omega-Prime CSV and optionally MCAP")
+    p_convert = sub.add_parser(
+        "convert",
+        help="Convert OpenLABEL to Omega-Prime CSV and optionally MCAP",
+    )
     p_convert.set_defaults(_dispatch="convert")
 
-    p_cal = sub.add_parser("calibrate", help="Compute calibration (pixel→ground homography) and write Calibration JSON")
+    p_cal = sub.add_parser(
+        "calibrate",
+        help="Compute calibration (pixel->ground homography) and write Calibration JSON",
+    )
     p_cal.set_defaults(_dispatch="calibrate")
 
     p_gui = sub.add_parser("gui", help="Launch the COSMO GUI")
@@ -58,10 +67,48 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _has_display() -> bool:
+    """
+    Best-effort detection of whether a GUI display is available.
+    - On Windows: assume a desktop session exists.
+    - On Linux: check for X11/Wayland variables (incl. WSLg).
+    If uncertain, we assume "yes" and let the GUI launch attempt decide.
+    """
+    if os.name == "nt":
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-
     ap = build_parser()
+
+    # Default behavior: `cosmo` (no args) launches GUI.
+    # Fallback behavior (Option 2): if GUI can't start (headless/missing deps),
+    # print help + a hint instead of a traceback.
+    if len(argv) == 0:
+        if not _has_display():
+            print("No GUI display detected (headless session).", file=sys.stderr)
+            print("Hint: run one of:", file=sys.stderr)
+            print("  cosmo convert ...\n  cosmo calibrate ...\n  cosmo gui", file=sys.stderr)
+            ap.print_help()
+            return 2
+
+        try:
+            from cosmo.cli.gui import main as gui_main
+
+            return int(gui_main([]))
+        except Exception as e:
+            print("COSMO GUI could not be started.", file=sys.stderr)
+            print(
+                "Hint: install GUI dependencies (e.g. PyQt5) or run a CLI command:",
+                file=sys.stderr,
+            )
+            print("  cosmo convert ...\n  cosmo calibrate ...\n  cosmo gui", file=sys.stderr)
+            print(f"Details: {e}", file=sys.stderr)
+            ap.print_help()
+            return 1
+
     # Parse only the top-level args; subcommand gets the rest
     ns, rest = ap.parse_known_args(argv)
 
@@ -70,14 +117,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     dispatch = getattr(ns, "_dispatch", None)
+
     if dispatch == "convert":
         from cosmo.cli.convert import main as convert_main
+
         return int(convert_main(rest))
+
     if dispatch == "calibrate":
         from cosmo.cli.calibrate import main as calibrate_main
+
         return int(calibrate_main(rest))
+
     if dispatch == "gui":
         from cosmo.cli.gui import main as gui_main
+
         return int(gui_main(rest))
 
     ap.print_help()
@@ -86,3 +139,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+    
