@@ -1,6 +1,5 @@
 """
 cosmo.app.convert_app
-
 Tool-facing orchestration for conversion runs.
 
 Responsibilities:
@@ -12,7 +11,6 @@ Responsibilities:
 This module is intentionally "app layer":
 it should not contain detailed parsing/geometry logic.
 """
-
 from __future__ import annotations
 
 import json
@@ -23,14 +21,12 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Callable, Optional, Tuple, Any, List
 
-
 LogFn = Callable[[str], None]
 
 
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------
 # Public results / configuration
-# -----------------------------------------------------------------------------
-
+# ------------------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ConvertConfig:
     openlabel: str
@@ -38,7 +34,6 @@ class ConvertConfig:
     georef_data: Optional[str] = None
     calibration: Optional[str] = None
     fps: Optional[float] = None
-
     write_csv: bool = True
     write_mcap: bool = True
 
@@ -59,18 +54,15 @@ class ConvertResult:
     run_dir: str
     outputs_dir: str
     base_name: str
-
     csv_path: Optional[str]
     mcap_path: Optional[str]
-
     fps_used: Optional[float]
     notes: List[str]
 
 
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------
 # Helpers: paths, run folders
-# -----------------------------------------------------------------------------
-
+# ------------------------------------------------------------------------------------------
 _PROJECT_MARKERS = (
     "pyproject.toml",
     "environment.yml",
@@ -101,9 +93,9 @@ def _safe_stem(name: str) -> str:
 def _make_run_dir(command: str, stem: str, out_dir: Optional[str], run_name: Optional[str]) -> Path:
     """
     If out_dir is:
-      - None: use <project_root>/runs/<timestamp>_<command>_<stem>/
-      - an existing directory: create a run folder inside it
-      - a non-existing path: treat it as the run folder itself
+    - None: use <project_root>/runs/<timestamp>_<command>_<stem>/
+    - an existing directory: create a run folder inside it
+    - a non-existing path: treat it as the run folder itself
     """
     if out_dir:
         base = Path(out_dir).expanduser()
@@ -124,18 +116,17 @@ def _write_json(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------
 # Converter import (NO scripts fallback)
-# -----------------------------------------------------------------------------
-
+# ------------------------------------------------------------------------------------------
 def _get_converter_or_raise():
     """
     Import the in-package converter implementation only.
-
     Raises a clear error if missing, because we do not rely on scripts/ at runtime.
     """
     try:
         from cosmo.converters.openlabel_to_omega import convert_openlabel_to_omega  # type: ignore
+
         return convert_openlabel_to_omega
     except Exception as e:
         raise RuntimeError(
@@ -146,27 +137,24 @@ def _get_converter_or_raise():
             "  convert_openlabel_to_omega(...)\n\n"
             "How to fix:\n"
             "  1) Ensure the file exists at: src/cosmo/converters/openlabel_to_omega.py\n"
-            "  2) Ensure you installed the project in editable mode:\n"
-            "       pip install -e .\n"
-            "     (or reinstall your package / refresh your environment)\n"
-            "  3) If you are running from source, ensure repo root is the working directory.\n\n"
+            "  2) Ensure repo root/src is on PYTHONPATH (Windows no-install runner does this)\n\n"
             f"Original import error: {type(e).__name__}: {e}"
         ) from e
 
 
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------
 # Public API
-# -----------------------------------------------------------------------------
-
+# ------------------------------------------------------------------------------------------
 def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertResult:
     """
     Run a conversion under a per-run folder and return structured output paths.
 
     Output naming:
       base_name := stem(openlabel) (lowercased & sanitized)
-      outputs:
-        outputs/<base_name>.csv
-        outputs/<base_name>.mcap
+
+    Outputs:
+      outputs/<base_name>.csv
+      outputs/<base_name>.mcap
     """
     openlabel_path = Path(cfg.openlabel).expanduser().resolve()
     if not openlabel_path.is_file():
@@ -189,15 +177,30 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         inputs["georef_data"] = str(Path(cfg.georef_data).expanduser().resolve())
     if cfg.calibration:
         inputs["calibration"] = str(Path(cfg.calibration).expanduser().resolve())
+
     _write_json(run_dir / "run_inputs.json", inputs)
 
     # import converter
     converter_fn = _get_converter_or_raise()
 
+    # --- Logging: converter + alignment info ---
     if log_fn:
         log_fn("[COSMO] Using converter: cosmo.converters.openlabel_to_omega")
 
-    # Call converter (signature matches script-era signature)
+        alignment_source = "none"
+        if cfg.georef_data:
+            alignment_source = "georef-data"
+        elif cfg.calibration:
+            alignment_source = "calibration"
+
+        log_fn(f"[COSMO] Alignment source: {alignment_source} / georef_data={bool(cfg.georef_data)} / calibration={bool(cfg.calibration)}")
+        log_fn(
+            f"[COSMO] Applied xy_offset={cfg.xy_offset}, yaw_offset_deg={cfg.yaw_offset_deg}, "
+            f"swap_xy={cfg.swap_xy}, flip_x={cfg.flip_x}, flip_y={cfg.flip_y}"
+        )
+        log_fn(f"[COSMO] OpenDRIVE embedded: {'yes' if cfg.opendrive else 'no'}")
+
+    # Call converter (pass log_fn through)
     converter_fn(
         openlabel_path=str(openlabel_path),
         odr_path=str(Path(cfg.opendrive).expanduser().resolve()) if cfg.opendrive else None,
@@ -212,11 +215,18 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         flip_y=cfg.flip_y,
         xy_offset=cfg.xy_offset,
         yaw_offset_rad=(cfg.yaw_offset_deg * 3.141592653589793 / 180.0),
+        log_fn=log_fn,  # << NEW
     )
 
     # determine produced outputs
     csv_path = str(out_prefix) + ".csv" if cfg.write_csv else None
     mcap_path = str(out_prefix) + ".mcap" if cfg.write_mcap else None
+
+    if log_fn:
+        if csv_path:
+            log_fn(f"[COSMO] CSV output: {csv_path}")
+        if mcap_path:
+            log_fn(f"[COSMO] MCAP output: {mcap_path}")
 
     if csv_path and not Path(csv_path).is_file():
         notes.append("CSV was requested but not found after conversion.")
@@ -234,6 +244,13 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         "csv_path": csv_path if csv_path and Path(csv_path).is_file() else None,
         "mcap_path": mcap_path if mcap_path and Path(mcap_path).is_file() else None,
         "fps_used": fps_used,
+        "alignment_source": ("georef-data" if cfg.georef_data else ("calibration" if cfg.calibration else "none")),
+        "applied_xy_offset": list(cfg.xy_offset),
+        "applied_yaw_offset_deg": cfg.yaw_offset_deg,
+        "applied_swap_xy": cfg.swap_xy,
+        "applied_flip_x": cfg.flip_x,
+        "applied_flip_y": cfg.flip_y,
+        "opendrive_embedded": bool(cfg.opendrive),
         "notes": notes,
         "python": sys.version,
     }

@@ -9,17 +9,35 @@
 
 
 <p align="center">
-  Convert ASAM OpenLABEL annotations to Omega-Prime CSV, and optionally MCAP/OSI, with a Qt GUI.
+A visual tool for convert ASAM OpenLABEL annotations to Omega-Prime.
 </p>
+
+> [!NOTE]
+> This open source project is maintained by [RISE Research Institutes of Sweden](https://ri.se/). See [LICENSE](LICENSE) file for open source license information.
+
+
+> [!NOTE]
+> This is a beta version. Bugs and missing features should be expected. Github issues can be added for bug reports or feature requests.
+
+---
+
 
 > ⚠️ **Licensing notice:** The license for this repository is currently **TBD**.  
 > Until finalized, **all rights are reserved**. See `LICENSE-TBD.md`.
 
+## Contents
 
-OL2OP
-=====
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Documentation](#documentation)
+- [Related Packages](#related-packages)
+- [Project Structure](#project-structure)
+- [Development](#development)
+- [License](#license)
 
-OL2OP is set of Python script to transform OpenLABEL files from SAVANT to Omega-Prime files.
+---
+
 
 
 

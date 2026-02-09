@@ -409,16 +409,38 @@ def convert_openlabel_to_omega(
     flip_x: bool = False,
     flip_y: bool = False,
     xy_offset: Tuple[float, float] = (0.0, 0.0),
-    yaw_offset_rad: float = 0.0,
+    yaw_offset_rad: float = 0.0,,
+    log_fn: Optional[callable] = None
 ):
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP.
 
     Signature matches the former script version for Phase 1 compatibility.
     """
+    def _log(msg: str) -> None:
+        if callable(log_fn):
+            try:
+                log_fn(msg)
+                return
+            except Exception:
+                pass
+        print(msg, flush=True)
+
+
     ol = load_json(openlabel_path)
     objects_meta, frames = parse_openlabel(ol)
     fps, H, defaults = load_alignment(calibration_path, georef_data_path, fps_arg)
+    alignment_source = 'none'
+    if georef_data_path:
+        alignment_source = 'georef-data'
+    elif calibration_path:
+        alignment_source = 'calibration'
+    _log(f"[COSMO] Alignment source: {alignment_source} (H={'present' if H is not None else 'none'}, fps={fps})")
+    _log(f"[COSMO] Applied xy_offset={xy_offset}, yaw_offset_deg={yaw_offset_rad * 180.0 / math.pi:.3f}, swap_xy={swap_xy}, flip_x={flip_x}, flip_y={flip_y}")
+    _log(f"[COSMO] OpenDRIVE embedded: {'yes' if (odr_path and write_mcap and betterosi is not None and os.path.isfile(odr_path)) else 'no'}")
+    if write_mcap and betterosi is None:
+        _log('[COSMO] MCAP requested but betterosi is not installed; will write CSV only.')
+
 
     vt_name_to_code, vr_name_to_code, vt_default, vr_default = build_enum_code_maps()
 
