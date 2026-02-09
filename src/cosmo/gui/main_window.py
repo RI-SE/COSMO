@@ -24,6 +24,7 @@ from cosmo.app.convert_app import ConvertConfig, ConvertResult
 from cosmo.app.calibrate_app import CalibrateConfig, CalibrateResult
 from cosmo.gui.workers import ConvertWorker, CalibrateWorker
 from cosmo.gui.plotting import PlotController
+from cosmo.gui.pixel_pairs_editor import PixelPairsEditorDialog
 from cosmo.gui.marker_converter import detect_odr_utm_with_offset, convert_visual_markers_latlon_to_odr_local
 
 
@@ -264,12 +265,17 @@ class MainWindow(QtWidgets.QMainWindow):
         cal_layout.addWidget(gb_ci)
         cg = QtWidgets.QGridLayout(gb_ci)
         cg.setColumnStretch(1, 1)
+        cg.setColumnStretch(3, 0)
 
         self.ed_pixel_pairs = QtWidgets.QLineEdit()
         self.btn_pixel_pairs = QtWidgets.QToolButton(text="…")
         cg.addWidget(QtWidgets.QLabel("Pixel pairs CSV:"), 0, 0)
         cg.addWidget(self.ed_pixel_pairs, 0, 1)
         cg.addWidget(self.btn_pixel_pairs, 0, 2)
+
+        self.btn_edit_pixel_pairs = QtWidgets.QPushButton("Edit pixel pairs…")
+        self.btn_edit_pixel_pairs.setToolTip("Open interactive editor for pixel_pairs.csv")
+        cg.addWidget(self.btn_edit_pixel_pairs, 0, 3)
 
         self.ed_visual_markers = QtWidgets.QLineEdit()
         self.btn_visual_markers = QtWidgets.QToolButton(text="…")
@@ -283,8 +289,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.lbl_convert_markers_hint = QtWidgets.QLabel("")
         self.lbl_convert_markers_hint.setWordWrap(True)
-        self.lbl_convert_markers_hint.setStyleSheet("color:#6b7280;")  # gray
-        self.lbl_convert_markers_hint.setToolTip("Marker conversion guidance")
+        self.lbl_convert_markers_hint.setStyleSheet("color:#6b7280;")
         cg.addWidget(self.lbl_convert_markers_hint, 2, 0)
 
         self.ed_cal_odr = QtWidgets.QLineEdit()
@@ -555,6 +560,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # calibration inputs
         self.btn_pixel_pairs.clicked.connect(self._pick_pixel_pairs)
+        self.btn_edit_pixel_pairs.clicked.connect(self._edit_pixel_pairs)
         self.btn_visual_markers.clicked.connect(self._pick_visual_markers)
         self.btn_convert_markers.clicked.connect(self._convert_markers_to_odr_local)
         self.ed_visual_markers.textChanged.connect(self._update_marker_convert_enable)
@@ -671,6 +677,31 @@ class MainWindow(QtWidgets.QMainWindow):
         if fn:
             self.ed_pixel_pairs.setText(fn)
 
+
+    def _edit_pixel_pairs(self):
+        """Open the interactive pixel_pairs editor and update the Pixel pairs CSV field."""
+        csv_path = self.ed_pixel_pairs.text().strip()
+        img_path = self.ed_cal_image.text().strip()
+        if not csv_path or not Path(csv_path).is_file():
+            QtWidgets.QMessageBox.warning(self, "Missing input", "Please select a pixel_pairs CSV first.")
+            return
+        if not img_path or not Path(img_path).is_file():
+            QtWidgets.QMessageBox.information(self, "Image needed", "Select an image file to edit pixel pairs interactively.")
+            fn = self._pick_file("Select image", "Images (*.png *.jpg *.jpeg *.bmp);;All files (*.*)")
+            if not fn:
+                return
+            self.ed_cal_image.setText(fn)
+            img_path = fn
+        try:
+            dlg = PixelPairsEditorDialog(image_path=img_path, pixel_pairs_csv=csv_path, parent=self)
+            exec_fn = getattr(dlg, "exec", None) or getattr(dlg, "exec_", None)
+            res = int(exec_fn()) if callable(exec_fn) else 0
+            if res:
+                out_csv = dlg.result_csv_path()
+                self.ed_pixel_pairs.setText(out_csv)
+                self._log_cal_line(f"[GUI] Pixel pairs updated: {out_csv}")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Pixel pair editor failed", str(e))
     def _pick_visual_markers(self):
         fn = self._pick_file("Select visual markers CSV", "CSV (*.csv);;All files (*.*)")
         if fn:
@@ -696,22 +727,19 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_marker_convert_enable(self):
         """Enable the marker conversion button only when markers are lat/lon and OpenDRIVE is UTM+offset."""
         try:
-            # Reset hint
             if hasattr(self, 'lbl_convert_markers_hint'):
                 self.lbl_convert_markers_hint.setText('')
                 self.lbl_convert_markers_hint.setStyleSheet('color:#6b7280;')
 
             vm_path = self.ed_visual_markers.text().strip()
             odr_path = (self.ed_cal_odr.text().strip() or self.ed_odr.text().strip())
-
             if not vm_path or not odr_path or (not Path(vm_path).is_file()) or (not Path(odr_path).is_file()):
                 self.btn_convert_markers.setEnabled(False)
                 return
 
-            header = Path(vm_path).read_text(encoding='utf-8', errors='ignore')[:300].lower()
+            header = Path(vm_path).read_text(encoding='utf-8', errors='ignore')[:400].lower()
             is_latlon = ('latitude' in header) and ('longitude' in header)
-            is_en = (',e' in header or ' e' in header) and (',n' in header or ' n' in header)
-
+            is_en = ('point_name' in header) and ('e' in header) and ('n' in header) and (not is_latlon)
             info = detect_odr_utm_with_offset(odr_path)
 
             if is_latlon and info is not None:
@@ -734,8 +762,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         except Exception:
             self.btn_convert_markers.setEnabled(False)
-            if hasattr(self, 'lbl_convert_markers_hint'):
-                self.lbl_convert_markers_hint.setText('')
     def _convert_markers_to_odr_local(self):
         """Convert visual_markers.csv (lat/lon) -> OpenDRIVE-local E/N and update the field."""
         vm_path = self.ed_visual_markers.text().strip()
@@ -1018,7 +1044,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _apply_plot_dock(self):
         """Undock/restore the embedded MCAP plot area."""
-        # Qt enum compatibility
         def _dock_area_right():
             if hasattr(QtCore.Qt, 'RightDockWidgetArea'):
                 return QtCore.Qt.RightDockWidgetArea
