@@ -45,12 +45,6 @@ Examples:
   cosmo convert --input scenario.json --odr map.xodr --mcap --csv
   cosmo convert --input scenario.json --no-mcap
   cosmo convert --input scenario.json --xy-offset 1.2 -0.5 --yaw-offset-deg 90
-
-Notes:
-  - --input is an alias for --openlabel (backwards compatible).
-  - --output is an alias for --out.
-  - When running without installing COSMO on Windows, use:
-      python run_cosmo.py convert --input ... --output ...
 """
     ap = argparse.ArgumentParser(
         prog="cosmo convert",
@@ -59,23 +53,18 @@ Notes:
         epilog=epilog.strip(),
     )
 
-    # --- INPUT / OUTPUT PATTERN ---
-    # Positional input (optional) for convenience:
+    # INPUT / OUTPUT pattern
     ap.add_argument(
         "input",
         nargs="?",
         help="Path to OpenLABEL JSON (positional alternative to --input/--openlabel)",
     )
-
-    # Alias pattern: --input is the preferred UX, --openlabel kept for compatibility
     ap.add_argument(
         "--input",
         "--openlabel",
         dest="openlabel",
         help="Path to OpenLABEL JSON",
     )
-
-    # Output base folder (alias -o / --output / --out)
     ap.add_argument(
         "-o",
         "--output",
@@ -85,34 +74,13 @@ Notes:
         help="Base output directory or explicit run directory",
     )
 
-    # --- Related inputs ---
-    ap.add_argument(
-        "--opendrive",
-        "--odr",
-        dest="opendrive",
-        required=False,
-        help="Path to OpenDRIVE .xodr/.xml/.txt",
-    )
-    ap.add_argument(
-        "--georef-data",
-        dest="georef_data",
-        required=False,
-        help="Path to ORBIT *_georef_data.json",
-    )
-    ap.add_argument(
-        "--calibration",
-        required=False,
-        help="Path to legacy calibration JSON (optional)",
-    )
-    ap.add_argument(
-        "--fps",
-        type=float,
-        required=False,
-        help="FPS override (optional)",
-    )
+    # Related inputs
+    ap.add_argument("--opendrive", "--odr", dest="opendrive", required=False, help="Path to OpenDRIVE .xodr/.xml/.txt")
+    ap.add_argument("--georef-data", dest="georef_data", required=False, help="Path to ORBIT *_georef_data.json")
+    ap.add_argument("--calibration", required=False, help="Path to legacy calibration JSON (optional)")
+    ap.add_argument("--fps", type=float, required=False, help="FPS override (optional)")
 
-    # --- Output toggles (standard style) ---
-    # BooleanOptionalAction automatically provides both --csv and --no-csv.
+    # Output toggles (standard style)
     ap.add_argument(
         "--csv",
         dest="write_csv",
@@ -128,22 +96,17 @@ Notes:
         help="Write MCAP (OSI GroundTruth) (default: true). Use --no-mcap to disable.",
     )
 
-    # --- Coordinate transforms ---
+    # Coordinate transforms
     ap.add_argument("--swap-xy", action="store_true", help="Swap X and Y after projection")
     ap.add_argument("--flip-x", action="store_true", help="Flip X -> -X after projection")
     ap.add_argument("--flip-y", action="store_true", help="Flip Y -> -Y after projection")
-    ap.add_argument(
-        "--xy-offset",
-        nargs=2,
-        metavar=("DX", "DY"),
-        help="Translate XY by DX DY meters after projection",
-    )
+    ap.add_argument("--xy-offset", nargs=2, metavar=("DX", "DY"), help="Translate XY by DX DY meters after projection")
     ap.add_argument("--yaw-offset-deg", type=float, default=0.0, help="Yaw offset (deg CCW)")
 
-    # --- Run folder naming ---
+    # Run folder naming
     ap.add_argument("--run-name", required=False, help="Optional override for run folder name")
 
-    # --- Output formatting ---
+    # Output formatting
     ap.add_argument("--json", action="store_true", help="Print result as JSON")
 
     return ap
@@ -155,8 +118,6 @@ def _resolve_openlabel(args: argparse.Namespace, ap: argparse.ArgumentParser) ->
       - positional "input"
       - --input/--openlabel
     """
-    # If both are supplied, prefer the explicit flag and ignore positional,
-    # but warn by treating it as an error to avoid surprises.
     if args.input and args.openlabel:
         ap.error("Provide either a positional input OR --input/--openlabel, not both.")
 
@@ -164,12 +125,11 @@ def _resolve_openlabel(args: argparse.Namespace, ap: argparse.ArgumentParser) ->
     if not openlabel:
         ap.error("Missing input. Provide OpenLABEL JSON as positional argument or via --input/--openlabel.")
 
-    # Validate file existence (nice UX)
     try:
         return _existing_file(openlabel)
     except argparse.ArgumentTypeError as e:
         ap.error(str(e))
-        raise  # unreachable, but keeps type checkers happy
+        raise
 
 
 def main(argv=None) -> int:

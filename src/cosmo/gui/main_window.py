@@ -4,11 +4,10 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
-from dataclasses import asdict
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
-# Qt binding selection: PyQt5 → PySide6 → PyQt6 (same as your current GUI). [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/convert_openlabel_to_omega.py)
+# Qt binding selection: PyQt5 → PySide6 → PyQt6 (same as your current GUI).
 try:
     from PyQt5 import QtCore, QtGui, QtWidgets
     _QT_API = "PyQt5"
@@ -24,7 +23,6 @@ from cosmo.app.convert_app import ConvertConfig, ConvertResult
 from cosmo.app.calibrate_app import CalibrateConfig, CalibrateResult
 from cosmo.gui.workers import ConvertWorker, CalibrateWorker
 from cosmo.gui.plotting import PlotController
-
 
 APP_NAME = "COSMO"
 ORG_NAME = "SYNERGIES"
@@ -62,20 +60,66 @@ def _qsettings_user_scope():
     return QtCore.QSettings.UserScope
 
 
+def _qt_align_center():
+    if hasattr(QtCore.Qt, "AlignCenter"):
+        return QtCore.Qt.AlignCenter
+    return QtCore.Qt.AlignmentFlag.AlignCenter
+
+
+def _qt_smooth_transform():
+    if hasattr(QtCore.Qt, "SmoothTransformation"):
+        return QtCore.Qt.SmoothTransformation
+    return QtCore.Qt.TransformationMode.SmoothTransformation
+
+
+def _dialog_exec(dlg) -> int:
+    fn = getattr(dlg, "exec", None) or getattr(dlg, "exec_", None)
+    return int(fn())
+
+
+class _ClickableImageLabel(QtWidgets.QLabel):
+    """
+    QLabel that calls a callback on double-click.
+    Used for residual/overlay previews: double-click to open floating viewer.
+    """
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.on_double_click = None  # callable()
+
+    def mouseDoubleClickEvent(self, event):  # noqa: N802
+        try:
+            if callable(self.on_double_click):
+                self.on_double_click()
+        finally:
+            super().mouseDoubleClickEvent(event)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} ({_QT_API})")
         self.setMinimumSize(980, 680)
 
-        self._settings = QtCore.QSettings(_qsettings_ini_format(), _qsettings_user_scope(), ORG_NAME, APP_NAME)
+        self._settings = QtCore.QSettings(
+            _qsettings_ini_format(),
+            _qsettings_user_scope(),
+            ORG_NAME,
+            APP_NAME,
+        )
 
         self._convert_worker: Optional[ConvertWorker] = None
         self._calib_worker: Optional[CalibrateWorker] = None
-
         self._last_run_dir: Optional[str] = None
         self._last_mcap_path: Optional[str] = None
         self._selected_mcap_path: Optional[str] = None
+
+        # calibration artifact paths for preview
+        self._last_residuals_png: Optional[str] = None
+        self._last_overlay_png: Optional[str] = None
+
+        # floating viewer windows (keep refs alive)
+        self._viewer_residuals = None
+        self._viewer_overlay = None
 
         self.plotter = PlotController()
 
@@ -83,9 +127,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._wire_signals()
         self._load_settings()
         self._refresh_plot_buttons()
+        self._update_cal_edit_enable()
 
-    # ---------------- UI construction ----------------
+        # rescale previews on scroll viewport resize
+        try:
+            self.scr_residuals.viewport().installEventFilter(self)
+            self.scr_overlay.viewport().installEventFilter(self)
+        except Exception:
+            pass
 
+    # ---------------------------------------------------------------------
+    # UI construction
+    # ---------------------------------------------------------------------
     def _build_ui(self):
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -97,13 +150,17 @@ class MainWindow(QtWidgets.QMainWindow):
             "<h2 style='margin:0'>COSMO</h2>"
             "<div style='color:#555'>Convert OpenLABEL → Omega-Prime CSV and OSI/MCAP, and compute calibration</div>"
         )
-        header.setTextFormat(QtCore.Qt.RichText if hasattr(QtCore.Qt, "RichText") else QtCore.Qt.TextFormat.RichText)
+        header.setTextFormat(
+            QtCore.Qt.RichText if hasattr(QtCore.Qt, "RichText") else QtCore.Qt.TextFormat.RichText
+        )
         root.addWidget(header)
 
         self.tabs = QtWidgets.QTabWidget()
         root.addWidget(self.tabs, 1)
 
-        # ----- Run tab
+        # -----------------------------------------------------------------
+        # Run tab
+        # -----------------------------------------------------------------
         self.tab_run = QtWidgets.QWidget()
         self.tabs.addTab(self.tab_run, "Run")
         run_layout = QtWidgets.QVBoxLayout(self.tab_run)
@@ -138,7 +195,6 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.ed_calib, 3, 1)
         g.addWidget(self.btn_calib, 3, 2)
 
-        # Alignment choice (simplified)
         self.rb_georef = QtWidgets.QRadioButton("Use ORBIT georef-data (recommended)")
         self.rb_calib = QtWidgets.QRadioButton("Use Calibration (legacy)")
         self.rb_none = QtWidgets.QRadioButton("No alignment file (pixel→meter fallback)")
@@ -151,7 +207,6 @@ class MainWindow(QtWidgets.QMainWindow):
         gb_align.setLayout(vb)
         g.addWidget(gb_align, 4, 1, 1, 2)
 
-        # Output options (Option A + B)
         gb_out = QtWidgets.QGroupBox("Output (Option A: run folder; B: names from input)")
         run_layout.addWidget(gb_out)
         og = QtWidgets.QGridLayout(gb_out)
@@ -241,7 +296,9 @@ class MainWindow(QtWidgets.QMainWindow):
         run_layout.addWidget(QtWidgets.QLabel("Log"))
         run_layout.addWidget(self.log_run, 1)
 
-        # ----- Calibration tab
+        # -----------------------------------------------------------------
+        # Calibration tab
+        # -----------------------------------------------------------------
         self.tab_cal = QtWidgets.QWidget()
         self.tabs.addTab(self.tab_cal, "Calibration")
         cal_layout = QtWidgets.QVBoxLayout(self.tab_cal)
@@ -252,7 +309,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "This computes a pixel→ground homography from pixel pairs and ground markers."
         )
         note.setWordWrap(True)
-        note.setTextFormat(QtCore.Qt.RichText if hasattr(QtCore.Qt, "RichText") else QtCore.Qt.TextFormat.RichText)
+        note.setTextFormat(
+            QtCore.Qt.RichText if hasattr(QtCore.Qt, "RichText") else QtCore.Qt.TextFormat.RichText
+        )
         cal_layout.addWidget(note)
 
         gb_ci = QtWidgets.QGroupBox("Calibration inputs")
@@ -324,60 +383,40 @@ class MainWindow(QtWidgets.QMainWindow):
         pg.addWidget(QtWidgets.QLabel("RANSAC thresh (m):"), 2, 0)
         pg.addWidget(self.sp_cal_thresh, 2, 1)
 
-
-
-        # Optional origin override (lat0/lon0) for ENU conversion
-
         self.chk_origin_override = QtWidgets.QCheckBox("Override origin (lat0/lon0)")
-
         self.sp_origin_lat0 = QtWidgets.QDoubleSpinBox()
-
         self.sp_origin_lon0 = QtWidgets.QDoubleSpinBox()
-
         self.sp_origin_lat0.setRange(-90.0, 90.0)
-
         self.sp_origin_lon0.setRange(-180.0, 180.0)
-
         self.sp_origin_lat0.setDecimals(10)
-
         self.sp_origin_lon0.setDecimals(10)
-
         self.sp_origin_lat0.setSingleStep(0.00001)
-
         self.sp_origin_lon0.setSingleStep(0.00001)
-
         self.sp_origin_lat0.setEnabled(False)
-
         self.sp_origin_lon0.setEnabled(False)
-
-
         hb_origin = QtWidgets.QHBoxLayout()
-
         hb_origin.addWidget(self.chk_origin_override)
-
         hb_origin.addSpacing(10)
-
         hb_origin.addWidget(QtWidgets.QLabel("lat0"))
-
         hb_origin.addWidget(self.sp_origin_lat0)
-
         hb_origin.addSpacing(10)
-
         hb_origin.addWidget(QtWidgets.QLabel("lon0"))
-
         hb_origin.addWidget(self.sp_origin_lon0)
-
         hb_origin.addStretch(1)
-
         pg.addWidget(QtWidgets.QLabel("ENU origin:"), 3, 0)
-
         pg.addLayout(hb_origin, 3, 1)
+
         cal_ctrl = QtWidgets.QHBoxLayout()
+        self.btn_edit_pixel_pairs = QtWidgets.QPushButton("Edit pixel pairs…")
+        self.btn_edit_pixel_pairs.setEnabled(False)
+
         self.btn_cal_run = QtWidgets.QPushButton("Compute calibration")
         self.btn_cal_cancel = QtWidgets.QPushButton("Cancel")
         self.btn_cal_cancel.setEnabled(False)
         self.btn_cal_use = QtWidgets.QPushButton("Use calibration in Run tab")
         self.btn_cal_use.setEnabled(False)
+
+        cal_ctrl.addWidget(self.btn_edit_pixel_pairs)
         cal_ctrl.addWidget(self.btn_cal_run)
         cal_ctrl.addWidget(self.btn_cal_cancel)
         cal_ctrl.addStretch(1)
@@ -388,14 +427,64 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_cal_result.setWordWrap(True)
         cal_layout.addWidget(self.lbl_cal_result)
 
+        # --- Calibration review (Residuals / Overlay) ---
+        self.gb_cal_preview = QtWidgets.QGroupBox("Calibration review")
+        cal_layout.addWidget(self.gb_cal_preview)
+        pv = QtWidgets.QVBoxLayout(self.gb_cal_preview)
+
+        self.tabs_cal_preview = QtWidgets.QTabWidget()
+        pv.addWidget(self.tabs_cal_preview, 1)
+
+        def _make_image_tab():
+            w = QtWidgets.QWidget()
+            l = QtWidgets.QVBoxLayout(w)
+            scroll = QtWidgets.QScrollArea()
+            scroll.setWidgetResizable(True)
+            lbl = _ClickableImageLabel("No image yet.")
+            lbl.setAlignment(_qt_align_center())
+            lbl.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
+            lbl.setScaledContents(False)
+            scroll.setWidget(lbl)
+            l.addWidget(scroll, 1)
+            return w, lbl, scroll
+
+        tab_res, self.lbl_residuals_img, self.scr_residuals = _make_image_tab()
+        tab_ovl, self.lbl_overlay_img, self.scr_overlay = _make_image_tab()
+        self.tabs_cal_preview.addTab(tab_res, "Residuals")
+        self.tabs_cal_preview.addTab(tab_ovl, "Overlay")
+
+        hb_prev = QtWidgets.QHBoxLayout()
+        self.btn_open_residuals = QtWidgets.QPushButton("Open residuals file")
+        self.btn_open_overlay = QtWidgets.QPushButton("Open overlay file")
+        self.btn_float_residuals = QtWidgets.QPushButton("Float residuals")
+        self.btn_float_overlay = QtWidgets.QPushButton("Float overlay")
+
+        self.btn_open_residuals.setEnabled(False)
+        self.btn_open_overlay.setEnabled(False)
+        self.btn_float_residuals.setEnabled(False)
+        self.btn_float_overlay.setEnabled(False)
+
+        hb_prev.addWidget(self.btn_open_residuals)
+        hb_prev.addWidget(self.btn_float_residuals)
+        hb_prev.addWidget(self.btn_open_overlay)
+        hb_prev.addWidget(self.btn_float_overlay)
+        hb_prev.addStretch(1)
+        pv.addLayout(hb_prev)
+
         self.log_cal = QtWidgets.QPlainTextEdit()
         self.log_cal.setReadOnly(True)
         self.log_cal.setLineWrapMode(_qt_no_wrap())
         self.log_cal.setMaximumBlockCount(20000)
         cal_layout.addWidget(QtWidgets.QLabel("Calibration log"))
-        cal_layout.addWidget(self.log_cal, 1)
+        cal_layout.addWidget(self.log_cal, 2)
 
-        # ----- Plot tab
+        # Double-click handlers (open viewer)
+        self.lbl_residuals_img.on_double_click = self._float_residuals
+        self.lbl_overlay_img.on_double_click = self._float_overlay
+
+        # -----------------------------------------------------------------
+        # Plot tab
+        # -----------------------------------------------------------------
         self.tab_plot = QtWidgets.QWidget()
         self.tabs.addTab(self.tab_plot, "Plot")
         plot_layout = QtWidgets.QVBoxLayout(self.tab_plot)
@@ -417,7 +506,6 @@ class MainWindow(QtWidgets.QMainWindow):
         hb_plot.addStretch(1)
         plot_layout.addLayout(hb_plot)
 
-        # Plot options
         self.chk_equal_axes = QtWidgets.QCheckBox("Lock X/Y scale (equal axes)")
         self.chk_equal_axes.setChecked(True)
         self.chk_undock_plot = QtWidgets.QCheckBox("Undock plot (floating dock)")
@@ -425,7 +513,6 @@ class MainWindow(QtWidgets.QMainWindow):
         plot_layout.addWidget(self.chk_equal_axes)
         plot_layout.addWidget(self.chk_undock_plot)
 
-        # Altair controls (simplified)
         gb_alt = QtWidgets.QGroupBox("Altair (interactive, browser)")
         plot_layout.addWidget(gb_alt)
         ag = QtWidgets.QGridLayout(gb_alt)
@@ -441,7 +528,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sp_end = QtWidgets.QSpinBox()
         self.sp_end.setRange(0, 10**9)
         self.sp_end.setValue(400)
-
         self.chk_altair_large = QtWidgets.QCheckBox("Allow large Altair datasets")
         self.chk_altair_large.setChecked(True)
         self.btn_refresh_metrics = QtWidgets.QPushButton("Refresh metrics")
@@ -452,16 +538,13 @@ class MainWindow(QtWidgets.QMainWindow):
         ag.addWidget(QtWidgets.QLabel("Object id:"), 0, 2)
         ag.addWidget(self.sp_obj_id, 0, 3)
         ag.addWidget(self.btn_refresh_metrics, 0, 4)
-
         ag.addWidget(QtWidgets.QLabel("Start frame:"), 1, 0)
         ag.addWidget(self.sp_start, 1, 1)
         ag.addWidget(QtWidgets.QLabel("End frame:"), 1, 2)
         ag.addWidget(self.sp_end, 1, 3)
-
         ag.addWidget(self.btn_plot_altair, 2, 0, 1, 5)
         ag.addWidget(self.chk_altair_large, 3, 0, 1, 5)
 
-        # Recording info
         gb_info = QtWidgets.QGroupBox("Recording info")
         plot_layout.addWidget(gb_info, 1)
         vi = QtWidgets.QVBoxLayout(gb_info)
@@ -477,14 +560,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.txt_info.setMaximumBlockCount(5000)
         vi.addWidget(self.txt_info, 1)
 
-        # Container for embedded matplotlib plot
         self.plot_container = QtWidgets.QWidget()
         self.plot_container_layout = QtWidgets.QVBoxLayout(self.plot_container)
         self.plot_container_layout.setContentsMargins(0, 0, 0, 0)
         self.plot_container_layout.setSpacing(0)
         plot_layout.addWidget(self.plot_container, 2)
 
-        # ----- Settings tab (simplified)
+        # -----------------------------------------------------------------
+        # Settings tab
+        # -----------------------------------------------------------------
         self.tab_settings = QtWidgets.QWidget()
         self.tabs.addTab(self.tab_settings, "Settings")
         s = QtWidgets.QFormLayout(self.tab_settings)
@@ -494,14 +578,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.ed_runs_base_settings = QtWidgets.QLineEdit()
         self.btn_runs_base_settings = QtWidgets.QToolButton(text="…")
-
         hb_runs = QtWidgets.QHBoxLayout()
         hb_runs.addWidget(self.ed_runs_base_settings, 1)
         hb_runs.addWidget(self.btn_runs_base_settings)
-
         s.addRow("Runs base directory (optional):", hb_runs)
         s.addRow("", self.chk_autoscroll)
-
         self.btn_reset_settings = QtWidgets.QPushButton("Reset settings")
         s.addRow("", self.btn_reset_settings)
 
@@ -510,15 +591,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_status = QtWidgets.QLabel("Ready")
         self.status.addPermanentWidget(self.lbl_status)
 
-    # ---------------- Wiring ----------------
-
+    # ---------------------------------------------------------------------
+    # Wiring
+    # ---------------------------------------------------------------------
     def _wire_signals(self):
         # file pickers
         self.btn_openlabel.clicked.connect(self._pick_openlabel)
         self.btn_odr.clicked.connect(self._pick_odr)
         self.btn_georef.clicked.connect(self._pick_georef)
         self.btn_calib.clicked.connect(self._pick_calib)
-
         self.btn_runs_base.clicked.connect(self._pick_runs_base)
         self.btn_runs_base_settings.clicked.connect(self._pick_runs_base_settings)
 
@@ -549,6 +630,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_cal_cancel.clicked.connect(self._cancel_calibrate)
         self.btn_cal_use.clicked.connect(self._use_generated_calibration)
 
+        # pixel pairs editor
+        self.btn_edit_pixel_pairs.clicked.connect(self._edit_pixel_pairs)
+
         # origin override enable/disable
         self.chk_origin_override.toggled.connect(self.sp_origin_lat0.setEnabled)
         self.chk_origin_override.toggled.connect(self.sp_origin_lon0.setEnabled)
@@ -561,15 +645,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_info_clear.clicked.connect(lambda: self.txt_info.setPlainText(""))
         self.btn_refresh_metrics.clicked.connect(self._refresh_metrics)
         self.btn_plot_altair.clicked.connect(self._plot_altair)
-
         self.chk_equal_axes.toggled.connect(lambda _b: self._replot_if_needed())
         self.chk_undock_plot.toggled.connect(lambda _b: self._apply_plot_dock())
 
         # settings
         self.btn_reset_settings.clicked.connect(self._reset_settings)
 
-    # ---------------- Helpers: logging ----------------
+        # preview open/float buttons
+        self.btn_open_residuals.clicked.connect(self._open_residuals_file)
+        self.btn_open_overlay.clicked.connect(self._open_overlay_file)
+        self.btn_float_residuals.clicked.connect(self._float_residuals)
+        self.btn_float_overlay.clicked.connect(self._float_overlay)
 
+        # enable/disable editor button as inputs change
+        self.ed_pixel_pairs.textChanged.connect(self._update_cal_edit_enable)
+        self.ed_cal_image.textChanged.connect(self._update_cal_edit_enable)
+
+    # ---------------------------------------------------------------------
+    # Event filter: rescale preview images on viewport resize
+    # ---------------------------------------------------------------------
+    def eventFilter(self, obj, event):  # noqa: N802
+        try:
+            if event.type() == QtCore.QEvent.Resize:
+                if obj is self.scr_residuals.viewport() or obj is self.scr_overlay.viewport():
+                    self._refresh_preview_images()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    # ---------------------------------------------------------------------
+    # Helpers: logging
+    # ---------------------------------------------------------------------
     def _log(self, widget: QtWidgets.QPlainTextEdit, line: str):
         widget.appendPlainText(line)
         if self.chk_autoscroll.isChecked():
@@ -582,8 +688,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _log_cal_line(self, line: str):
         self._log(self.log_cal, line)
 
-    # ---------------- File pickers ----------------
-
+    # ---------------------------------------------------------------------
+    # File pickers
+    # ---------------------------------------------------------------------
     def _last_dir(self) -> str:
         self._settings.beginGroup(SETTINGS_GROUP)
         d = self._settings.value("last_dir", str(Path.home()))
@@ -620,7 +727,6 @@ class MainWindow(QtWidgets.QMainWindow):
         fn = self._pick_file("Select OpenDRIVE", "OpenDRIVE (*.xodr *.xml *.txt);;All files (*.*)")
         if fn:
             self.ed_odr.setText(fn)
-            # also sync into calibration tab unless already set
             if not self.ed_cal_odr.text().strip():
                 self.ed_cal_odr.setText(fn)
 
@@ -646,11 +752,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if d:
             self.ed_runs_base_settings.setText(d)
 
-    # calibration pickers
     def _pick_pixel_pairs(self):
         fn = self._pick_file("Select pixel pairs CSV", "CSV (*.csv);;All files (*.*)")
         if fn:
             self.ed_pixel_pairs.setText(fn)
+            self._update_cal_edit_enable()
 
     def _pick_visual_markers(self):
         fn = self._pick_file("Select visual markers CSV", "CSV (*.csv);;All files (*.*)")
@@ -666,14 +772,16 @@ class MainWindow(QtWidgets.QMainWindow):
         fn = self._pick_file("Select image", "Images (*.png *.jpg *.jpeg *.bmp);;All files (*.*)")
         if fn:
             self.ed_cal_image.setText(fn)
+            self._update_cal_edit_enable()
 
     def _pick_cal_openlabel(self):
         fn = self._pick_file("Select OpenLABEL JSON", "JSON (*.json);;All files (*.*)")
         if fn:
             self.ed_cal_openlabel.setText(fn)
 
-    # ---------------- Run tab: conversion ----------------
-
+    # ---------------------------------------------------------------------
+    # Run tab: conversion
+    # ---------------------------------------------------------------------
     def _update_output_preview(self):
         raw = self.ed_openlabel.text().strip()
         if not raw:
@@ -719,7 +827,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         fps = float(self.sp_fps.value())
         fps_val = fps if fps > 0.0 else None
-
         runs_base = self.ed_runs_base.text().strip() or None
 
         cfg = ConvertConfig(
@@ -792,8 +899,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._log_run_line(f"[GUI] CSV: {result.csv_path}")
         if result.mcap_path:
             self._log_run_line(f"[GUI] MCAP: {result.mcap_path}")
-            self._last_mcap_path = result.mcap_path
 
+        self._last_mcap_path = result.mcap_path
         if result.notes:
             for n in result.notes:
                 self._log_run_line(f"[NOTE] {n}")
@@ -805,7 +912,31 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         _open_in_file_manager(self._last_run_dir)
 
-    # ---------------- Calibration tab ----------------
+    # ---------------------------------------------------------------------
+    # Calibration tab
+    # ---------------------------------------------------------------------
+    def _update_cal_edit_enable(self):
+        pp = self.ed_pixel_pairs.text().strip()
+        img = self.ed_cal_image.text().strip()
+        ok = bool(pp and Path(pp).is_file() and img and Path(img).is_file())
+        self.btn_edit_pixel_pairs.setEnabled(ok)
+
+    def _edit_pixel_pairs(self):
+        pp = self.ed_pixel_pairs.text().strip()
+        img = self.ed_cal_image.text().strip()
+        if not (pp and Path(pp).is_file() and img and Path(img).is_file()):
+            QtWidgets.QMessageBox.information(self, "Missing", "Select both pixel pairs CSV and an image.")
+            return
+
+        from cosmo.gui.pixel_pairs_editor import PixelPairsEditorDialog
+        dlg = PixelPairsEditorDialog(img, pp, parent=self)
+        rc = _dialog_exec(dlg)
+        if rc:
+            new_csv = dlg.result_csv_path()
+            self.ed_pixel_pairs.setText(new_csv)
+            res = QtWidgets.QMessageBox.question(self, "Recompute?", "Pixel pairs updated. Recompute calibration now?")
+            if res == QtWidgets.QMessageBox.Yes:
+                self._run_calibrate()
 
     def _collect_calibrate_config(self) -> Optional[CalibrateConfig]:
         pixel_pairs = self.ed_pixel_pairs.text().strip()
@@ -828,7 +959,7 @@ class MainWindow(QtWidgets.QMainWindow):
             ransac_thresh_m=float(self.sp_cal_thresh.value()),
             origin_lat0=float(self.sp_origin_lat0.value()) if self.chk_origin_override.isChecked() else None,
             origin_lon0=float(self.sp_origin_lon0.value()) if self.chk_origin_override.isChecked() else None,
-            out_dir=self.ed_runs_base.text().strip() or None,  # reuse runs base
+            out_dir=self.ed_runs_base.text().strip() or None,
             run_name=None,
         )
         return cfg
@@ -843,6 +974,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self._save_settings()
+
         self.log_cal.appendPlainText("\n" + "=" * 80)
         self.log_cal.appendPlainText("Starting calibration…")
 
@@ -850,6 +982,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_cal_cancel.setEnabled(True)
         self.btn_cal_use.setEnabled(False)
         self.lbl_cal_result.setText("")
+
+        self._last_residuals_png = None
+        self._last_overlay_png = None
+
+        self.lbl_residuals_img.setText("No image yet.")
+        self.lbl_overlay_img.setText("No image yet.")
+        self.lbl_residuals_img.setPixmap(QtGui.QPixmap())
+        self.lbl_overlay_img.setPixmap(QtGui.QPixmap())
+
+        self.btn_open_residuals.setEnabled(False)
+        self.btn_open_overlay.setEnabled(False)
+        self.btn_float_residuals.setEnabled(False)
+        self.btn_float_overlay.setEnabled(False)
 
         self._calib_worker = CalibrateWorker(cfg)
         self._calib_worker.line.connect(self._log_cal_line)
@@ -862,6 +1007,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log_cal_line("[GUI] Cancel requested (will stop after current step if supported).")
         self._calib_worker.cancel()
         self.btn_cal_cancel.setEnabled(False)
+
+    def _show_png_in_label(self, png_path: Optional[str], label: QtWidgets.QLabel, scroll: QtWidgets.QScrollArea) -> bool:
+        if not png_path or not Path(png_path).is_file():
+            label.setText("No image available.")
+            label.setPixmap(QtGui.QPixmap())
+            return False
+
+        pm = QtGui.QPixmap(png_path)
+        if pm.isNull():
+            label.setText(f"Could not load image:\n{png_path}")
+            label.setPixmap(QtGui.QPixmap())
+            return False
+
+        vw = scroll.viewport().width()
+        if vw and pm.width() > vw:
+            pm2 = pm.scaledToWidth(vw, _qt_smooth_transform())
+            label.setPixmap(pm2)
+        else:
+            label.setPixmap(pm)
+
+        label.setText("")
+        return True
+
+    def _refresh_preview_images(self):
+        try:
+            self._show_png_in_label(self._last_residuals_png, self.lbl_residuals_img, self.scr_residuals)
+            self._show_png_in_label(self._last_overlay_png, self.lbl_overlay_img, self.scr_overlay)
+        except Exception:
+            pass
 
     def _on_calibrate_finished(self, obj):
         self.btn_cal_run.setEnabled(True)
@@ -886,14 +1060,62 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log_cal_line(f"[GUI] Calibration: {result.calibration_json_path}")
         if result.summary_json_path:
             self._log_cal_line(f"[GUI] Summary: {result.summary_json_path}")
+        if result.residuals_png_path:
+            self._log_cal_line(f"[GUI] Residuals: {result.residuals_png_path}")
+        if result.overlay_png_path:
+            self._log_cal_line(f"[GUI] Overlay: {result.overlay_png_path}")
         if result.notes:
             for n in result.notes:
                 self._log_cal_line(f"[NOTE] {n}")
 
+        self._last_residuals_png = result.residuals_png_path
+        self._last_overlay_png = result.overlay_png_path
+
+        ok1 = self._show_png_in_label(self._last_residuals_png, self.lbl_residuals_img, self.scr_residuals)
+        ok2 = self._show_png_in_label(self._last_overlay_png, self.lbl_overlay_img, self.scr_overlay)
+
+        self.btn_open_residuals.setEnabled(bool(ok1))
+        self.btn_open_overlay.setEnabled(bool(ok2))
+        self.btn_float_residuals.setEnabled(bool(ok1))
+        self.btn_float_overlay.setEnabled(bool(ok2))
+
+        if ok2:
+            self.tabs_cal_preview.setCurrentIndex(1)
+        elif ok1:
+            self.tabs_cal_preview.setCurrentIndex(0)
+
+    def _open_residuals_file(self):
+        if self._last_residuals_png and Path(self._last_residuals_png).exists():
+            _open_in_file_manager(self._last_residuals_png)
+
+    def _open_overlay_file(self):
+        if self._last_overlay_png and Path(self._last_overlay_png).exists():
+            _open_in_file_manager(self._last_overlay_png)
+
+    def _float_residuals(self):
+        if not self._last_residuals_png or not Path(self._last_residuals_png).is_file():
+            return
+        from cosmo.gui.image_viewer import ImageViewerWindow
+        if self._viewer_residuals is None:
+            self._viewer_residuals = ImageViewerWindow("Calibration residuals", parent=self)
+        self._viewer_residuals.load_image(self._last_residuals_png)  # defaults to Fit
+        self._viewer_residuals.show()
+        self._viewer_residuals.raise_()
+        self._viewer_residuals.activateWindow()
+
+    def _float_overlay(self):
+        if not self._last_overlay_png or not Path(self._last_overlay_png).is_file():
+            return
+        from cosmo.gui.image_viewer import ImageViewerWindow
+        if self._viewer_overlay is None:
+            self._viewer_overlay = ImageViewerWindow("Calibration overlay", parent=self)
+        self._viewer_overlay.load_image(self._last_overlay_png)  # defaults to Fit
+        self._viewer_overlay.show()
+        self._viewer_overlay.raise_()
+        self._viewer_overlay.activateWindow()
+
     def _use_generated_calibration(self):
-        # When using app layer, calibration result path is shown in label; parse it.
         txt = self.lbl_cal_result.text()
-        # naive extraction: last token after ": "
         if ": " in txt:
             path = txt.split(": ", 1)[1].strip()
         else:
@@ -903,8 +1125,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.rb_calib.setChecked(True)
             self.tabs.setCurrentWidget(self.tab_run)
 
-    # ---------------- Plot tab ----------------
-
+    # ---------------------------------------------------------------------
+    # Plot tab
+    # ---------------------------------------------------------------------
     def _refresh_plot_buttons(self):
         has_sel = self._selected_mcap_path is not None and Path(self._selected_mcap_path).is_file()
         self.btn_plot_selected.setEnabled(bool(has_sel))
@@ -933,9 +1156,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 w.setParent(None)
 
     def _apply_plot_dock(self):
-        # Simplified: just keep embedded in the Plot tab for now.
-        # You can add a QDockWidget here later if desired.
-        # Checkbox is stored as preference only.
         pass
 
     def _plot_selected(self):
@@ -952,23 +1172,19 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.plotter.is_available():
             QtWidgets.QMessageBox.critical(self, "omega_prime missing", "Install 'omega-prime' to plot MCAP files.")
             return
-
         rec = self.plotter.load_recording(mcap_path)
         if rec is None:
             QtWidgets.QMessageBox.critical(self, "Failed to load", f"Could not load recording:\n{mcap_path}")
             return
-
         try:
             fig = self.plotter.embed_plot(rec, equal_axes=self.chk_equal_axes.isChecked())
             canvas, toolbar = self.plotter.make_canvas_and_toolbar(fig, self)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Plot failed", str(e))
             return
-
         self._clear_plot_container()
         self.plot_container_layout.addWidget(toolbar)
         self.plot_container_layout.addWidget(canvas, 1)
-
         self.lbl_plot_status.setText(f"Showing: {mcap_path}")
         self._last_mcap_path = mcap_path
         self._refresh_metrics()
@@ -993,7 +1209,6 @@ class MainWindow(QtWidgets.QMainWindow):
             f"r.map:\n{info.map_repr}\n\n"
             f"Object IDs:\n{info.object_ids}\n"
         )
-        # Adjust object id range
         if info.object_ids:
             self.sp_obj_id.setRange(int(info.object_ids[0]), int(info.object_ids[-1]))
             if int(self.sp_obj_id.value()) not in info.object_ids:
@@ -1040,11 +1255,11 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Altair plot failed", str(e))
 
-    # ---------------- Settings persistence ----------------
-
+    # ---------------------------------------------------------------------
+    # Settings persistence
+    # ---------------------------------------------------------------------
     def _load_settings(self):
         self._settings.beginGroup(SETTINGS_GROUP)
-
         self.ed_openlabel.setText(self._settings.value("openlabel", ""))
         self.ed_odr.setText(self._settings.value("odr", ""))
         self.ed_georef.setText(self._settings.value("georef", ""))
@@ -1074,26 +1289,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sp_dy.setValue(float(self._settings.value("dy", 0.0)))
         self.sp_yaw_deg.setValue(float(self._settings.value("yaw_deg", 0.0)))
 
-        # Plot settings
-        self.chk_equal_axes.setChecked(self._settings.value("plot_equal_axes", True, type=bool))
-        self.chk_undock_plot.setChecked(self._settings.value("plot_undock", False, type=bool))
-        self.chk_altair_large.setChecked(self._settings.value("altair_large", True, type=bool))
-
         self._settings.endGroup()
 
         self._update_output_preview()
+        self._update_cal_edit_enable()
 
     def _save_settings(self):
         self._settings.beginGroup(SETTINGS_GROUP)
-
         self._settings.setValue("openlabel", self.ed_openlabel.text().strip())
         self._settings.setValue("odr", self.ed_odr.text().strip())
         self._settings.setValue("georef", self.ed_georef.text().strip())
         self._settings.setValue("calib", self.ed_calib.text().strip())
-
         self._settings.setValue("runs_base", self.ed_runs_base.text().strip())
-        self._settings.setValue("autoscroll", self.chk_autoscroll.isChecked())
 
+        self._settings.setValue("autoscroll", self.chk_autoscroll.isChecked())
         method = "georef" if self.rb_georef.isChecked() else ("calibration" if self.rb_calib.isChecked() else "none")
         self._settings.setValue("alignment_method", method)
 
@@ -1107,12 +1316,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._settings.setValue("dx", float(self.sp_dx.value()))
         self._settings.setValue("dy", float(self.sp_dy.value()))
         self._settings.setValue("yaw_deg", float(self.sp_yaw_deg.value()))
-
-        self._settings.setValue("plot_equal_axes", self.chk_equal_axes.isChecked())
-        self._settings.setValue("plot_undock", self.chk_undock_plot.isChecked())
-        self._settings.setValue("altair_large", self.chk_altair_large.isChecked())
-
         self._settings.endGroup()
+
         try:
             self._settings.sync()
         except Exception:
@@ -1127,8 +1332,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._settings.endGroup()
         self._load_settings()
 
-    def closeEvent(self, event: QtGui.QCloseEvent):
-        # prevent accidental close while running
+    def closeEvent(self, event: QtGui.QCloseEvent):  # noqa: N802
         if self._convert_worker is not None or self._calib_worker is not None:
             res = QtWidgets.QMessageBox.question(self, "Quit", "A job is still running. Quit anyway?")
             if res != QtWidgets.QMessageBox.Yes:
