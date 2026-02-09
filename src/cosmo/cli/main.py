@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import traceback
 from importlib import metadata
 
 
@@ -72,11 +73,129 @@ def _has_display() -> bool:
     Best-effort detection of whether a GUI display is available.
     - On Windows: assume a desktop session exists.
     - On Linux: check for X11/Wayland variables (incl. WSLg).
-    If uncertain, we assume "yes" and let the GUI launch attempt decide.
+    If uncertain, assume "yes" and let the GUI launch attempt decide.
     """
     if os.name == "nt":
         return True
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def _debug_enabled() -> bool:
+    """Enable detailed tracebacks if COSMO_DEBUG=1/true/yes."""
+    v = os.environ.get("COSMO_DEBUG", "")
+    return v.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _is_missing_qt_binding(exc: BaseException) -> str | None:
+    """
+    Return the missing Qt binding name if it looks like a missing binding error.
+    Works for ModuleNotFoundError and ImportError-style messages.
+    """
+    # ModuleNotFoundError has .name
+    name = getattr(exc, "name", None)
+    if isinstance(name, str) and name in {"PyQt5", "PyQt6", "PySide6"}:
+        return name
+
+    msg = str(exc)
+    for candidate in ("PyQt5", "PyQt6", "PySide6"):
+        if f"No module named '{candidate}'" in msg or f"No module named {candidate}" in msg:
+            return candidate
+    return None
+
+
+def _looks_like_qt_platform_plugin_issue(msg: str) -> bool:
+    """
+    Detect common Qt platform plugin failures, e.g.:
+    'Could not load the Qt platform plugin "xcb" ...'
+    """
+    m = msg.lower()
+    return (
+        "qt platform plugin" in m
+        or "could not load the qt platform plugin" in m
+        or "this application failed to start because no qt platform plugin" in m
+        or "available platform plugins are" in m
+    )
+
+
+def _print_gui_failure_help(ap: argparse.ArgumentParser, exc: BaseException) -> int:
+    """
+    Print a specific, actionable help message for GUI startup failures.
+    Returns an appropriate exit code.
+    """
+    # If user wants details, include traceback.
+    if _debug_enabled():
+        print("COSMO_DEBUG enabled: printing full traceback.\n", file=sys.stderr)
+        traceback.print_exc()
+        print("", file=sys.stderr)
+
+    msg = str(exc)
+    missing = _is_missing_qt_binding(exc)
+
+    print("COSMO GUI could not be started.", file=sys.stderr)
+
+    # 1) Missing Qt binding
+    if missing:
+        print(f"Reason: Missing Qt binding '{missing}'.", file=sys.stderr)
+        print("Fix (recommended): install Qt via conda-forge in your active environment:", file=sys.stderr)
+        print("  conda install -c conda-forge pyqt", file=sys.stderr)
+        print("Alternative: install optional GUI deps if pip is allowed:", file=sys.stderr)
+        print("  python -m pip install '.[gui]'", file=sys.stderr)
+        # Your project defines GUI deps as optional extras (PyQt5>=5.15). [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/gui.py)
+        print("", file=sys.stderr)
+        print("Meanwhile you can run CLI commands:", file=sys.stderr)
+        print("  cosmo convert ...\n  cosmo calibrate ...", file=sys.stderr)
+        ap.print_help()
+        return 1
+
+    # 2) Headless / no display on Linux
+    if os.name != "nt" and not _has_display():
+        print("Reason: No GUI display detected (headless session).", file=sys.stderr)
+        print("Fix: run under a desktop session/WSLg or set up X11/Wayland forwarding.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Meanwhile you can run CLI commands:", file=sys.stderr)
+        print("  cosmo convert ...\n  cosmo calibrate ...\n  cosmo gui", file=sys.stderr)
+        ap.print_help()
+        return 2
+
+    # 3) Qt platform plugin issue (common on Linux/WSL when xcb/wayland bits are missing)
+    if _looks_like_qt_platform_plugin_issue(msg):
+        print("Reason: Qt platform plugin failed to initialize.", file=sys.stderr)
+        print("This often happens on Linux/WSL when the 'xcb'/'wayland' runtime pieces are missing", file=sys.stderr)
+        print("or when no display server is available.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Things to try:", file=sys.stderr)
+        print("  - If in WSL: ensure WSLg is enabled and a GUI session is available.", file=sys.stderr)
+        print("  - Ensure you have a display variable (DISPLAY or WAYLAND_DISPLAY).", file=sys.stderr)
+        print("  - Prefer conda-forge Qt packages:  conda install -c conda-forge pyqt", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Error detail:", file=sys.stderr)
+        print(f"  {msg}", file=sys.stderr)
+        ap.print_help()
+        return 1
+
+    # 4) Generic fallback
+    print("Reason: An exception occurred while launching the GUI.", file=sys.stderr)
+    print("Tip: set COSMO_DEBUG=1 to see a full traceback for debugging.", file=sys.stderr)
+    print("Error detail:", file=sys.stderr)
+    print(f"  {msg}", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("You can still use CLI commands:", file=sys.stderr)
+    print("  cosmo convert ...\n  cosmo calibrate ...\n  cosmo gui", file=sys.stderr)
+    ap.print_help()
+    return 1
+
+
+def _run_gui(ap: argparse.ArgumentParser, rest: list[str]) -> int:
+    """
+    Run the GUI (via cosmo.cli.gui) and provide tuned error messages on failure.
+    """
+    try:
+        # gui.py simply imports cosmo.gui.main_window and runs it. [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/gui.py)
+        from cosmo.cli.gui import main as gui_main
+
+        return int(gui_main(rest))
+    except Exception as e:
+        return _print_gui_failure_help(ap, e)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -84,30 +203,16 @@ def main(argv: list[str] | None = None) -> int:
     ap = build_parser()
 
     # Default behavior: `cosmo` (no args) launches GUI.
-    # Fallback behavior (Option 2): if GUI can't start (headless/missing deps),
-    # print help + a hint instead of a traceback.
+    # Option 2 fallback: if GUI can't start, print help + hints instead of traceback. [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/gui.py)
     if len(argv) == 0:
-        if not _has_display():
+        # If we're clearly headless on Linux, don't even try launching Qt.
+        if os.name != "nt" and not _has_display():
             print("No GUI display detected (headless session).", file=sys.stderr)
             print("Hint: run one of:", file=sys.stderr)
             print("  cosmo convert ...\n  cosmo calibrate ...\n  cosmo gui", file=sys.stderr)
             ap.print_help()
             return 2
-
-        try:
-            from cosmo.cli.gui import main as gui_main
-
-            return int(gui_main([]))
-        except Exception as e:
-            print("COSMO GUI could not be started.", file=sys.stderr)
-            print(
-                "Hint: install GUI dependencies (e.g. PyQt5) or run a CLI command:",
-                file=sys.stderr,
-            )
-            print("  cosmo convert ...\n  cosmo calibrate ...\n  cosmo gui", file=sys.stderr)
-            print(f"Details: {e}", file=sys.stderr)
-            ap.print_help()
-            return 1
+        return _run_gui(ap, [])
 
     # Parse only the top-level args; subcommand gets the rest
     ns, rest = ap.parse_known_args(argv)
@@ -129,9 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         return int(calibrate_main(rest))
 
     if dispatch == "gui":
-        from cosmo.cli.gui import main as gui_main
-
-        return int(gui_main(rest))
+        # Use the same tuned fallback messaging for explicit 'cosmo gui'.
+        return _run_gui(ap, rest)
 
     ap.print_help()
     return 2
@@ -139,4 +243,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-    
