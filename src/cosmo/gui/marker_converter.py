@@ -17,13 +17,13 @@ class OdrUtmInfo:
 
 
 def detect_odr_utm_with_offset(opendrive_path: str) -> Optional[OdrUtmInfo]:
-    """Detect +proj=utm +zone=.. in <geoReference> and <offset x= y=> in OpenDRIVE header."""
+    """Detect +proj=utm +zone=.. in <geoReference> and <offset x/y> in OpenDRIVE header."""
     p = Path(opendrive_path)
     if not p.is_file():
         return None
-    txt = p.read_text(encoding="utf-8", errors="ignore")
+    txt = p.read_text(encoding='utf-8', errors='ignore')
 
-    if "+proj=utm" not in txt.lower():
+    if '+proj=utm' not in txt.lower():
         return None
 
     m_zone = re.search(r"\+zone=([0-9]+)", txt)
@@ -31,16 +31,15 @@ def detect_odr_utm_with_offset(opendrive_path: str) -> Optional[OdrUtmInfo]:
         return None
     zone = int(m_zone.group(1))
 
-    m_off = re.search(r"<offset\s+[^>]*x=\"([0-9\.-]+)\"\s+y=\"([0-9\.-]+)\"", txt)
+    m_off = re.search(r'<offset\s+[^>]*x="([0-9\.-]+)"\s+y="([0-9\.-]+)"', txt)
     if not m_off:
         return None
-    offx = float(m_off.group(1))
-    offy = float(m_off.group(2))
-    return OdrUtmInfo(zone=zone, offset_x=offx, offset_y=offy)
+
+    return OdrUtmInfo(zone=zone, offset_x=float(m_off.group(1)), offset_y=float(m_off.group(2)))
 
 
 def latlon_to_utm(lat_deg: float, lon_deg: float, zone: int) -> Tuple[float, float]:
-    """WGS84 latitude/longitude -> UTM easting/northing for a given zone."""
+    """WGS84 lat/lon -> UTM easting/northing for a given zone."""
     a = 6378137.0
     f = 1 / 298.257223563
     e2 = f * (2 - f)
@@ -99,39 +98,35 @@ def convert_visual_markers_latlon_to_odr_local(
     opendrive_path: str,
     out_csv: Optional[str] = None,
 ) -> str:
-    """Convert visual_markers.csv (lat/lon/alt) to OpenDRIVE-local E,N using UTM zone + <offset>."""
+    """Convert visual_markers.csv (lat/lon) -> OpenDRIVE-local E/N using UTM zone + header offset."""
     vm_path = Path(visual_markers_csv)
     if not vm_path.is_file():
         raise FileNotFoundError(f"visual_markers not found: {vm_path}")
 
     info = detect_odr_utm_with_offset(opendrive_path)
     if info is None:
-        raise RuntimeError(
-            "OpenDRIVE does not look like UTM (+proj=utm +zone=..) with <offset x/y>. Cannot convert markers."
-        )
+        raise RuntimeError('OpenDRIVE is not UTM (+proj=utm +zone=..) with <offset x/y>; cannot convert markers automatically.')
 
     if out_csv is None:
-        out_csv = str(vm_path.with_name(vm_path.stem + "_odr_local.csv"))
+        out_csv = str(vm_path.with_name(vm_path.stem + '_odr_local.csv'))
     out_path = Path(out_csv)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     rows_out: List[Tuple[str, float, float]] = []
-    with open(vm_path, "r", newline="", encoding="utf-8") as f:
+    with open(vm_path, 'r', newline='', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            name = str(row.get("point_name", "")).strip()
+            name = str(row.get('point_name', '')).strip()
             if not name:
                 continue
-            lat = float(row["latitude"])
-            lon = float(row["longitude"])
+            lat = float(row['latitude'])
+            lon = float(row['longitude'])
             Eutm, Nutm = latlon_to_utm(lat, lon, info.zone)
-            E = Eutm - info.offset_x
-            N = Nutm - info.offset_y
-            rows_out.append((name, E, N))
+            rows_out.append((name, Eutm - info.offset_x, Nutm - info.offset_y))
 
-    with open(out_path, "w", newline="", encoding="utf-8") as f:
+    with open(out_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        w.writerow(["point_name", "E", "N"])
+        w.writerow(['point_name', 'E', 'N'])
         for name, E, N in rows_out:
             w.writerow([name, f"{E:.6f}", f"{N:.6f}"])
 

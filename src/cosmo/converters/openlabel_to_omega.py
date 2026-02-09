@@ -29,7 +29,7 @@ import json
 import math
 import os
 import re
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Callable
 
 import numpy as np
 
@@ -409,8 +409,8 @@ def convert_openlabel_to_omega(
     flip_x: bool = False,
     flip_y: bool = False,
     xy_offset: Tuple[float, float] = (0.0, 0.0),
-    yaw_offset_rad: float = 0.0,,
-    log_fn: Optional[callable] = None
+    yaw_offset_rad: float = 0.0,
+    log_fn: Optional[Callable[[str], None]] = None,
 ):
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP.

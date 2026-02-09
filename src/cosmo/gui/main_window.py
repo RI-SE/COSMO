@@ -77,6 +77,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_run_dir: Optional[str] = None
         self._last_mcap_path: Optional[str] = None
         self._selected_mcap_path: Optional[str] = None
+        self._plot_dock = None  # QDockWidget when undocked
+        self._plot_tab_layout = None  # set in _build_ui
+
 
         self.plotter = PlotController()
 
@@ -84,6 +87,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._wire_signals()
         self._load_settings()
         self._refresh_plot_buttons()
+        self._update_marker_convert_enable()
 
     # ---------------- UI construction ----------------
 
@@ -277,23 +281,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_convert_markers.setEnabled(False)
         cg.addWidget(self.btn_convert_markers, 2, 1, 1, 2)
 
+        self.lbl_convert_markers_hint = QtWidgets.QLabel("")
+        self.lbl_convert_markers_hint.setWordWrap(True)
+        self.lbl_convert_markers_hint.setStyleSheet("color:#6b7280;")  # gray
+        self.lbl_convert_markers_hint.setToolTip("Marker conversion guidance")
+        cg.addWidget(self.lbl_convert_markers_hint, 2, 0)
+
         self.ed_cal_odr = QtWidgets.QLineEdit()
         self.btn_cal_odr = QtWidgets.QToolButton(text="…")
-        cg.addWidget(QtWidgets.QLabel("OpenDRIVE (geoReference):"), 2, 0)
-        cg.addWidget(self.ed_cal_odr, 2, 1)
-        cg.addWidget(self.btn_cal_odr, 2, 2)
+        cg.addWidget(QtWidgets.QLabel("OpenDRIVE (geoReference):"), 3, 0)
+        cg.addWidget(self.ed_cal_odr, 3, 1)
+        cg.addWidget(self.btn_cal_odr, 3, 2)
 
         self.ed_cal_image = QtWidgets.QLineEdit()
         self.btn_cal_image = QtWidgets.QToolButton(text="…")
-        cg.addWidget(QtWidgets.QLabel("Image (optional):"), 3, 0)
-        cg.addWidget(self.ed_cal_image, 3, 1)
-        cg.addWidget(self.btn_cal_image, 3, 2)
+        cg.addWidget(QtWidgets.QLabel("Image (optional):"), 4, 0)
+        cg.addWidget(self.ed_cal_image, 4, 1)
+        cg.addWidget(self.btn_cal_image, 4, 2)
 
         self.ed_cal_openlabel = QtWidgets.QLineEdit()
         self.btn_cal_openlabel = QtWidgets.QToolButton(text="…")
-        cg.addWidget(QtWidgets.QLabel("OpenLABEL (optional validation):"), 4, 0)
-        cg.addWidget(self.ed_cal_openlabel, 4, 1)
-        cg.addWidget(self.btn_cal_openlabel, 4, 2)
+        cg.addWidget(QtWidgets.QLabel("OpenLABEL (optional validation):"), 5, 0)
+        cg.addWidget(self.ed_cal_openlabel, 5, 1)
+        cg.addWidget(self.btn_cal_openlabel, 5, 2)
 
         gb_cp = QtWidgets.QGroupBox("Parameters")
         cal_layout.addWidget(gb_cp)
@@ -404,6 +414,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tab_plot = QtWidgets.QWidget()
         self.tabs.addTab(self.tab_plot, "Plot")
         plot_layout = QtWidgets.QVBoxLayout(self.tab_plot)
+        self._plot_tab_layout = plot_layout
         plot_layout.setSpacing(8)
 
         self.lbl_plot_status = QtWidgets.QLabel("No plot yet. Create an MCAP or browse one.")
@@ -546,6 +557,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_pixel_pairs.clicked.connect(self._pick_pixel_pairs)
         self.btn_visual_markers.clicked.connect(self._pick_visual_markers)
         self.btn_convert_markers.clicked.connect(self._convert_markers_to_odr_local)
+        self.ed_visual_markers.textChanged.connect(self._update_marker_convert_enable)
+        self.ed_cal_odr.textChanged.connect(self._update_marker_convert_enable)
         self.btn_cal_odr.clicked.connect(self._pick_cal_odr)
         self.btn_cal_image.clicked.connect(self._pick_cal_image)
         self.btn_cal_openlabel.clicked.connect(self._pick_cal_openlabel)
@@ -677,6 +690,71 @@ class MainWindow(QtWidgets.QMainWindow):
         fn = self._pick_file("Select OpenLABEL JSON", "JSON (*.json);;All files (*.*)")
         if fn:
             self.ed_cal_openlabel.setText(fn)
+
+
+    # ----------------- Marker conversion helper (UTM+offset -> OpenDRIVE-local E/N) -----------------
+    def _update_marker_convert_enable(self):
+        """Enable the marker conversion button only when markers are lat/lon and OpenDRIVE is UTM+offset."""
+        try:
+            # Reset hint
+            if hasattr(self, 'lbl_convert_markers_hint'):
+                self.lbl_convert_markers_hint.setText('')
+                self.lbl_convert_markers_hint.setStyleSheet('color:#6b7280;')
+
+            vm_path = self.ed_visual_markers.text().strip()
+            odr_path = (self.ed_cal_odr.text().strip() or self.ed_odr.text().strip())
+
+            if not vm_path or not odr_path or (not Path(vm_path).is_file()) or (not Path(odr_path).is_file()):
+                self.btn_convert_markers.setEnabled(False)
+                return
+
+            header = Path(vm_path).read_text(encoding='utf-8', errors='ignore')[:300].lower()
+            is_latlon = ('latitude' in header) and ('longitude' in header)
+            is_en = (',e' in header or ' e' in header) and (',n' in header or ' n' in header)
+
+            info = detect_odr_utm_with_offset(odr_path)
+
+            if is_latlon and info is not None:
+                self.btn_convert_markers.setEnabled(True)
+                if hasattr(self, 'lbl_convert_markers_hint'):
+                    self.lbl_convert_markers_hint.setText('⚠ Markers are lat/lon while OpenDRIVE is UTM+offset. Convert to OpenDRIVE-local E/N for best calibration.')
+                    self.lbl_convert_markers_hint.setStyleSheet('color:#a16207;')
+                return
+
+            if is_en:
+                self.btn_convert_markers.setEnabled(False)
+                if hasattr(self, 'lbl_convert_markers_hint'):
+                    self.lbl_convert_markers_hint.setText('✅ Markers already appear to be in E/N. No conversion needed.')
+                    self.lbl_convert_markers_hint.setStyleSheet('color:#065f46;')
+                return
+
+            self.btn_convert_markers.setEnabled(False)
+            if is_latlon and hasattr(self, 'lbl_convert_markers_hint'):
+                self.lbl_convert_markers_hint.setText('ℹ Markers are lat/lon, but OpenDRIVE is not detected as UTM+offset. Conversion helper disabled.')
+
+        except Exception:
+            self.btn_convert_markers.setEnabled(False)
+            if hasattr(self, 'lbl_convert_markers_hint'):
+                self.lbl_convert_markers_hint.setText('')
+    def _convert_markers_to_odr_local(self):
+        """Convert visual_markers.csv (lat/lon) -> OpenDRIVE-local E/N and update the field."""
+        vm_path = self.ed_visual_markers.text().strip()
+        odr_path = (self.ed_cal_odr.text().strip() or self.ed_odr.text().strip())
+
+        if not vm_path or not Path(vm_path).is_file():
+            QtWidgets.QMessageBox.warning(self, 'Missing input', 'Please select a visual_markers.csv file first.')
+            return
+        if not odr_path or not Path(odr_path).is_file():
+            QtWidgets.QMessageBox.warning(self, 'Missing input', 'Please select an OpenDRIVE file first.')
+            return
+
+        try:
+            out_csv = convert_visual_markers_latlon_to_odr_local(vm_path, odr_path)
+            self.ed_visual_markers.setText(out_csv)
+            self._log_cal_line(f'[GUI] Converted markers to OpenDRIVE-local E/N: {out_csv}')
+            QtWidgets.QMessageBox.information(self, 'Markers converted', f'Wrote OpenDRIVE-local markers:\n{out_csv}')
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Conversion failed', str(e))
 
     # ---------------- Run tab: conversion ----------------
 
@@ -939,11 +1017,56 @@ class MainWindow(QtWidgets.QMainWindow):
                 w.setParent(None)
 
     def _apply_plot_dock(self):
-        # Simplified: just keep embedded in the Plot tab for now.
-        # You can add a QDockWidget here later if desired.
-        # Checkbox is stored as preference only.
-        pass
+        """Undock/restore the embedded MCAP plot area."""
+        # Qt enum compatibility
+        def _dock_area_right():
+            if hasattr(QtCore.Qt, 'RightDockWidgetArea'):
+                return QtCore.Qt.RightDockWidgetArea
+            return QtCore.Qt.DockWidgetArea.RightDockWidgetArea
 
+        def _dock_areas_all():
+            if hasattr(QtCore.Qt, 'AllDockWidgetAreas'):
+                return QtCore.Qt.AllDockWidgetAreas
+            return QtCore.Qt.DockWidgetArea.AllDockWidgetAreas
+
+        undock = self.chk_undock_plot.isChecked()
+        if self._plot_tab_layout is None:
+            return
+
+        if undock:
+            if self._plot_dock is None:
+                self._plot_dock = QtWidgets.QDockWidget('MCAP Plot', self)
+                self._plot_dock.setObjectName('mcap_plot_dock')
+                try:
+                    self._plot_dock.setAllowedAreas(_dock_areas_all())
+                except Exception:
+                    pass
+                self.addDockWidget(_dock_area_right(), self._plot_dock)
+
+            try:
+                self._plot_tab_layout.removeWidget(self.plot_container)
+            except Exception:
+                pass
+            self.plot_container.setParent(None)
+            self._plot_dock.setWidget(self.plot_container)
+            try:
+                self._plot_dock.setFloating(True)
+            except Exception:
+                pass
+            self._plot_dock.show()
+        else:
+            if self._plot_dock is not None:
+                try:
+                    self._plot_dock.setWidget(None)
+                except Exception:
+                    pass
+                try:
+                    self._plot_dock.hide()
+                except Exception:
+                    pass
+
+            self.plot_container.setParent(self.tab_plot)
+            self._plot_tab_layout.addWidget(self.plot_container)
     def _plot_selected(self):
         if not self._selected_mcap_path:
             return
@@ -1153,7 +1276,6 @@ def main():
     win.show()
     exec_fn = getattr(app, "exec", None) or getattr(app, "exec_", None)
     sys.exit(exec_fn())
-
 
 if __name__ == "__main__":
     main()
