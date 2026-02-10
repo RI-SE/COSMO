@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 # Qt binding selection: PyQt5 → PySide6 → PyQt6
 try:
@@ -20,21 +19,38 @@ def _qt_keep_aspect_ratio():
     return QtCore.Qt.AspectRatioMode.KeepAspectRatio
 
 
+def _qt_smooth_transform():
+    if hasattr(QtCore.Qt, "SmoothTransformation"):
+        return QtCore.Qt.SmoothTransformation
+    return QtCore.Qt.TransformationMode.SmoothTransformation
+
+
+def _qt_scroll_hand_drag():
+    if hasattr(QtWidgets.QGraphicsView, "DragMode"):
+        return QtWidgets.QGraphicsView.DragMode.ScrollHandDrag
+    return QtWidgets.QGraphicsView.ScrollHandDrag
+
+
+def _qt_anchor_under_mouse():
+    if hasattr(QtWidgets.QGraphicsView, "ViewportAnchor"):
+        return QtWidgets.QGraphicsView.ViewportAnchor.AnchorUnderMouse
+    return QtWidgets.QGraphicsView.AnchorUnderMouse
+
+
+def _qt_anchor_center():
+    if hasattr(QtWidgets.QGraphicsView, "ViewportAnchor"):
+        return QtWidgets.QGraphicsView.ViewportAnchor.AnchorViewCenter
+    return QtWidgets.QGraphicsView.AnchorViewCenter
+
+
 class ImageViewerWindow(QtWidgets.QMainWindow):
-    """
-    Floating image viewer window with zoom/pan.
-    Default open mode: FIT-to-window.
-      - Wheel: zoom
-      - Drag: pan (hand)
-      - Buttons: Fit, 1:1, 50%, 200%
-    """
+    """Simple floating image viewer with zoom + pan."""
 
-    def __init__(self, title: str = "Image viewer", parent=None):
+    def __init__(self, image_path: str, title: str = "Image viewer", parent=None):
         super().__init__(parent)
+        self._path = str(image_path)
         self.setWindowTitle(title)
-        self.resize(1100, 750)
-
-        self._pixmap_item: Optional[QtWidgets.QGraphicsPixmapItem] = None
+        self.resize(1200, 800)
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -45,75 +61,74 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
         # Toolbar row
         hb = QtWidgets.QHBoxLayout()
         self.btn_fit = QtWidgets.QPushButton("Fit")
-        self.btn_1to1 = QtWidgets.QPushButton("1:1")
-        self.btn_50 = QtWidgets.QPushButton("50%")
+        self.btn_100 = QtWidgets.QPushButton("100%")
         self.btn_200 = QtWidgets.QPushButton("200%")
         self.lbl_path = QtWidgets.QLabel("")
-        self.lbl_path.setStyleSheet("color:#555;")
-
-        self.lbl_path.setTextInteractionFlags(
-            QtCore.Qt.TextSelectableByMouse
-            if hasattr(QtCore.Qt, "TextSelectableByMouse")
-            else QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-
+        self.lbl_path.setStyleSheet("color:#6b7280;")
         hb.addWidget(self.btn_fit)
-        hb.addWidget(self.btn_1to1)
-        hb.addWidget(self.btn_50)
+        hb.addWidget(self.btn_100)
         hb.addWidget(self.btn_200)
-        hb.addSpacing(10)
-        hb.addWidget(self.lbl_path, 1)
+        hb.addStretch(1)
+        hb.addWidget(self.lbl_path)
         root.addLayout(hb)
 
         # Graphics view
         self.view = QtWidgets.QGraphicsView()
-        self.view.setRenderHint(QtGui.QPainter.Antialiasing, True)
-        self.view.setDragMode(QtWidgets.QGraphicsView.ScrollHandDrag)
+        self.view.setDragMode(_qt_scroll_hand_drag())
+        try:
+            self.view.setTransformationAnchor(_qt_anchor_under_mouse())
+            self.view.setResizeAnchor(_qt_anchor_center())
+        except Exception:
+            pass
+
         self.scene = QtWidgets.QGraphicsScene(self.view)
         self.view.setScene(self.scene)
         root.addWidget(self.view, 1)
 
-        # Wire
-        self.btn_fit.clicked.connect(self.fit_to_window)
-        self.btn_1to1.clicked.connect(lambda: self.set_zoom(1.0))
-        self.btn_50.clicked.connect(lambda: self.set_zoom(0.5))
+        self._pixmap_item = None
+        self._pixmap = None
+
+        self.btn_fit.clicked.connect(self.fit)
+        self.btn_100.clicked.connect(lambda: self.set_zoom(1.0))
         self.btn_200.clicked.connect(lambda: self.set_zoom(2.0))
 
-        # Override wheel to zoom
+        # Mouse wheel zoom
         self.view.wheelEvent = self._wheel_zoom  # type: ignore[assignment]
 
-    def load_image(self, path: str) -> None:
-        p = Path(path)
-        self.scene.clear()
-        self._pixmap_item = None
+        self.load(self._path)
 
+    def load(self, image_path: str):
+        p = Path(image_path)
+        self._path = str(p)
         self.lbl_path.setText(str(p))
-
         if not p.is_file():
-            self.scene.addText(f"File not found:\n{p}")
+            self.scene.clear()
+            self.scene.addText(f"File not found: {p}")
             return
 
         pm = QtGui.QPixmap(str(p))
-        if pm.isNull():
-            self.scene.addText(f"Could not load image:\n{p}")
-            return
-
+        self.scene.clear()
+        self._pixmap = pm
         self._pixmap_item = self.scene.addPixmap(pm)
         self.scene.setSceneRect(QtCore.QRectF(pm.rect()))
-        self.fit_to_window()  # default to FIT
+        self.fit()
 
-    def fit_to_window(self) -> None:
-        if self._pixmap_item is None:
-            return
-        self.view.fitInView(self.scene.sceneRect(), _qt_keep_aspect_ratio())
-
-    def set_zoom(self, factor: float) -> None:
-        if self._pixmap_item is None:
+    def fit(self):
+        if self._pixmap is None or self._pixmap.isNull():
             return
         self.view.resetTransform()
-        self.view.scale(factor, factor)
+        self.view.fitInView(self.scene.sceneRect(), _qt_keep_aspect_ratio())
 
-    def _wheel_zoom(self, event) -> None:
-        angle = event.angleDelta().y()
-        factor = 1.15 if angle > 0 else 1 / 1.15
+    def set_zoom(self, scale: float):
+        if self._pixmap is None or self._pixmap.isNull():
+            return
+        self.view.resetTransform()
+        self.view.scale(scale, scale)
+
+    def _wheel_zoom(self, event):
+        try:
+            delta = event.angleDelta().y()
+        except Exception:
+            delta = 0
+        factor = 1.15 if delta > 0 else 1 / 1.15
         self.view.scale(factor, factor)

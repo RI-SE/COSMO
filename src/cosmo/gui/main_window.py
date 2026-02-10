@@ -25,6 +25,7 @@ from cosmo.app.calibrate_app import CalibrateConfig, CalibrateResult
 from cosmo.gui.workers import ConvertWorker, CalibrateWorker
 from cosmo.gui.plotting import PlotController
 from cosmo.gui.pixel_pairs_editor import PixelPairsEditorDialog
+from cosmo.gui.image_viewer import ImageViewerWindow
 from cosmo.gui.marker_converter import detect_odr_utm_with_offset, convert_visual_markers_latlon_to_odr_local
 
 
@@ -64,6 +65,16 @@ def _qsettings_user_scope():
     return QtCore.QSettings.UserScope
 
 
+
+def _qt_keep_aspect_ratio():
+    if hasattr(QtCore.Qt, "KeepAspectRatio"):
+        return QtCore.Qt.KeepAspectRatio
+    return QtCore.Qt.AspectRatioMode.KeepAspectRatio
+
+def _qt_smooth_transform():
+    if hasattr(QtCore.Qt, "SmoothTransformation"):
+        return QtCore.Qt.SmoothTransformation
+    return QtCore.Qt.TransformationMode.SmoothTransformation
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -78,6 +89,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_run_dir: Optional[str] = None
         self._last_mcap_path: Optional[str] = None
         self._selected_mcap_path: Optional[str] = None
+        self._cal_residuals_png: Optional[str] = None
+        self._cal_overlay_png: Optional[str] = None
+        self._image_viewers = []  # keep references
         self._plot_dock = None  # QDockWidget when undocked
         self._plot_tab_layout = None  # set in _build_ui
 
@@ -408,6 +422,36 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_cal_result.setWordWrap(True)
         cal_layout.addWidget(self.lbl_cal_result)
 
+        gb_cal_plots = QtWidgets.QGroupBox("Calibration plots")
+        cal_layout.addWidget(gb_cal_plots)
+        pg2 = QtWidgets.QGridLayout(gb_cal_plots)
+        pg2.setColumnStretch(0, 1)
+        pg2.setColumnStretch(1, 1)
+
+        self.lbl_residuals_title = QtWidgets.QLabel("Homography fit residuals")
+        self.lbl_overlay_title = QtWidgets.QLabel("Overlay markers on image")
+        self.lbl_residuals_title.setStyleSheet("font-weight:600;")
+        self.lbl_overlay_title.setStyleSheet("font-weight:600;")
+        pg2.addWidget(self.lbl_residuals_title, 0, 0)
+        pg2.addWidget(self.lbl_overlay_title, 0, 1)
+
+        self.preview_residuals = QtWidgets.QLabel("(no residuals image yet)")
+        self.preview_overlay = QtWidgets.QLabel("(no overlay image yet)")
+        for w in (self.preview_residuals, self.preview_overlay):
+            w.setMinimumSize(360, 220)
+            w.setAlignment(QtCore.Qt.AlignCenter if hasattr(QtCore.Qt, "AlignCenter") else QtCore.Qt.AlignmentFlag.AlignCenter)
+            w.setStyleSheet("border:1px solid #d1d5db; background:#f9fafb; color:#6b7280;")
+        pg2.addWidget(self.preview_residuals, 1, 0)
+        pg2.addWidget(self.preview_overlay, 1, 1)
+
+        hb_open = QtWidgets.QHBoxLayout()
+        self.btn_open_residuals = QtWidgets.QPushButton("Open residuals…")
+        self.btn_open_overlay = QtWidgets.QPushButton("Open overlay…")
+        self.btn_open_residuals.setEnabled(False)
+        self.btn_open_overlay.setEnabled(False)
+        pg2.addWidget(self.btn_open_residuals, 2, 0)
+        pg2.addWidget(self.btn_open_overlay, 2, 1)
+
         self.log_cal = QtWidgets.QPlainTextEdit()
         self.log_cal.setReadOnly(True)
         self.log_cal.setLineWrapMode(_qt_no_wrap())
@@ -568,6 +612,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_cal_odr.clicked.connect(self._pick_cal_odr)
         self.btn_cal_image.clicked.connect(self._pick_cal_image)
         self.btn_cal_openlabel.clicked.connect(self._pick_cal_openlabel)
+        self.btn_open_residuals.clicked.connect(lambda: self._open_calibration_image(self._cal_residuals_png, "Residuals"))
+        self.btn_open_overlay.clicked.connect(lambda: self._open_calibration_image(self._cal_overlay_png, "Overlay"))
 
         # run calibration
         self.btn_cal_run.clicked.connect(self._run_calibrate)
@@ -782,6 +828,43 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Conversion failed', str(e))
 
+
+    def _set_preview_image(self, label: QtWidgets.QLabel, path: Optional[str]):
+        """Load an image into a preview label (scaled)."""
+        if not path or not Path(path).is_file():
+            label.setText("(missing)")
+            label.setPixmap(QtGui.QPixmap())
+            return
+        pm = QtGui.QPixmap(path)
+        if pm.isNull():
+            label.setText("(could not load image)")
+            label.setPixmap(QtGui.QPixmap())
+            return
+        target = label.size()
+        scaled = pm.scaled(target, _qt_keep_aspect_ratio(), _qt_smooth_transform())
+        label.setPixmap(scaled)
+        label.setText("")
+
+    def _open_calibration_image(self, path: Optional[str], title: str):
+        if not path or not Path(path).is_file():
+            QtWidgets.QMessageBox.information(self, "Not available", f"No image available: {title}.")
+            return
+        win = ImageViewerWindow(image_path=path, title=f"{title} - {Path(path).name}", parent=None)
+        win.show()
+        self._image_viewers.append(win)
+
+    def _update_calibration_previews(self, result: Optional[CalibrateResult]):
+        """Update preview widgets from the latest calibration result."""
+        self._cal_residuals_png = None
+        self._cal_overlay_png = None
+        if result is not None:
+            self._cal_residuals_png = result.residuals_png_path
+            self._cal_overlay_png = result.overlay_png_path
+        if hasattr(self, "preview_residuals"):
+            self._set_preview_image(self.preview_residuals, self._cal_residuals_png)
+            self._set_preview_image(self.preview_overlay, self._cal_overlay_png)
+            self.btn_open_residuals.setEnabled(bool(self._cal_residuals_png and Path(self._cal_residuals_png).is_file()))
+            self.btn_open_overlay.setEnabled(bool(self._cal_overlay_png and Path(self._cal_overlay_png).is_file()))
     # ---------------- Run tab: conversion ----------------
 
     def _update_output_preview(self):
@@ -955,6 +1038,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_settings()
         self.log_cal.appendPlainText("\n" + "=" * 80)
         self.log_cal.appendPlainText("Starting calibration…")
+        self._update_calibration_previews(None)
 
         self.btn_cal_run.setEnabled(False)
         self.btn_cal_cancel.setEnabled(True)
@@ -985,6 +1069,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         result: CalibrateResult = obj
+        self._update_calibration_previews(result)
         self._last_run_dir = result.run_dir
         self.btn_open_run.setEnabled(True)
 
