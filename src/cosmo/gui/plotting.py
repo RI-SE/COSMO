@@ -59,7 +59,8 @@ class PlotController:
       - Rendering via Agg can happen off-thread (use render_figure_to_png_bytes / save_figure_png_agg).
     """
 
-    def __init__(self):
+    def __init__(self, main_window):
+        self.main_window = main_window       # <--- needed to access reflect-Y checkbox
         self._cache_path: Optional[str] = None
         self._cache_rec: Any = None
 
@@ -235,6 +236,9 @@ class PlotController:
         fig.savefig(str(out_path), dpi=dpi, bbox_inches="tight")
         return str(out_path.resolve())
 
+    # ================================================================
+    # === UPDATED ALTAIR PLOT (WITH REFLECT-Y TOGGLE SUPPORT) ========
+    # ================================================================
     def plot_altair_browser(
         self,
         rec,
@@ -262,21 +266,26 @@ class PlotController:
                 except Exception:
                     pass
         else:
-            try:
-                alt.data_transformers.enable("default")
-            except Exception:
-                pass
+            try: alt.data_transformers.enable("default")
+            except Exception: pass
 
+        # NEW: read GUI toggle under Plot section
+        try:
+            reflect_y_flag = self.main_window.chk_reflect_y.isChecked()
+        except Exception:
+            reflect_y_flag = True
+
+        # Call recording's plot_altair with reflect_y forwarded
         chart = rec.plot_altair(
-            start_frame=int(start_frame),
-            end_frame=int(end_frame),
-            metric_column=str(metric),
-            idx=int(obj_id),
+            start_frame=start_frame,
+            end_frame=end_frame,
+            metric_column=metric,
+            idx=obj_id,
+            reflect_y=reflect_y_flag,
+            plot_wedges=True,
         )
 
-        try:
-            alt.renderers.enable("browser")
-        except Exception:
-            pass
+        try: alt.renderers.enable("browser")
+        except Exception: pass
 
         chart.show()

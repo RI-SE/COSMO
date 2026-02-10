@@ -19,12 +19,6 @@ def _qt_keep_aspect_ratio():
     return QtCore.Qt.AspectRatioMode.KeepAspectRatio
 
 
-def _qt_smooth_transform():
-    if hasattr(QtCore.Qt, "SmoothTransformation"):
-        return QtCore.Qt.SmoothTransformation
-    return QtCore.Qt.TransformationMode.SmoothTransformation
-
-
 def _qt_scroll_hand_drag():
     if hasattr(QtWidgets.QGraphicsView, "DragMode"):
         return QtWidgets.QGraphicsView.DragMode.ScrollHandDrag
@@ -44,7 +38,7 @@ def _qt_anchor_center():
 
 
 class ImageViewerWindow(QtWidgets.QMainWindow):
-    """Simple floating image viewer with zoom + pan."""
+    """Floating image viewer with pan + wheel zoom."""
 
     def __init__(self, image_path: str, title: str = "Image viewer", parent=None):
         super().__init__(parent)
@@ -58,7 +52,6 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
 
-        # Toolbar row
         hb = QtWidgets.QHBoxLayout()
         self.btn_fit = QtWidgets.QPushButton("Fit")
         self.btn_100 = QtWidgets.QPushButton("100%")
@@ -72,7 +65,6 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
         hb.addWidget(self.lbl_path)
         root.addLayout(hb)
 
-        # Graphics view
         self.view = QtWidgets.QGraphicsView()
         self.view.setDragMode(_qt_scroll_hand_drag())
         try:
@@ -85,14 +77,11 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
         self.view.setScene(self.scene)
         root.addWidget(self.view, 1)
 
-        self._pixmap_item = None
         self._pixmap = None
 
         self.btn_fit.clicked.connect(self.fit)
         self.btn_100.clicked.connect(lambda: self.set_zoom(1.0))
         self.btn_200.clicked.connect(lambda: self.set_zoom(2.0))
-
-        # Mouse wheel zoom
         self.view.wheelEvent = self._wheel_zoom  # type: ignore[assignment]
 
         self.load(self._path)
@@ -101,15 +90,13 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
         p = Path(image_path)
         self._path = str(p)
         self.lbl_path.setText(str(p))
+        self.scene.clear()
         if not p.is_file():
-            self.scene.clear()
             self.scene.addText(f"File not found: {p}")
             return
-
         pm = QtGui.QPixmap(str(p))
-        self.scene.clear()
         self._pixmap = pm
-        self._pixmap_item = self.scene.addPixmap(pm)
+        self.scene.addPixmap(pm)
         self.scene.setSceneRect(QtCore.QRectF(pm.rect()))
         self.fit()
 
@@ -120,8 +107,6 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
         self.view.fitInView(self.scene.sceneRect(), _qt_keep_aspect_ratio())
 
     def set_zoom(self, scale: float):
-        if self._pixmap is None or self._pixmap.isNull():
-            return
         self.view.resetTransform()
         self.view.scale(scale, scale)
 
