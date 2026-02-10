@@ -270,10 +270,10 @@ class PlotController:
             except Exception: pass
 
         # NEW: read GUI toggle under Plot section
-        try:
-            reflect_y_flag = self.main_window.chk_reflect_y.isChecked()
-        except Exception:
-            reflect_y_flag = True
+        # try:
+        #     reflect_y_flag = self.main_window.chk_reflect_y.isChecked()
+        # except Exception:
+        #     reflect_y_flag = True
 
         # Call recording's plot_altair with reflect_y forwarded
         chart = rec.plot_altair(
@@ -281,7 +281,7 @@ class PlotController:
             end_frame=end_frame,
             metric_column=metric,
             idx=obj_id,
-            reflect_y=reflect_y_flag,
+            # reflect_y=reflect_y_flag,
             plot_wedges=True,
         )
 

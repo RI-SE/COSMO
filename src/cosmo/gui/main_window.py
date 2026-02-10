@@ -505,9 +505,9 @@ class MainWindow(QtWidgets.QMainWindow):
         plot_layout.addWidget(self.chk_undock_plot)
         
         # NEW: Reflect-Y toggle for Altair projection
-        self.chk_reflect_y = QtWidgets.QCheckBox("Reflect Y (Altair)")
-        self.chk_reflect_y.setChecked(True)  # default keeps current behavior
-        plot_layout.addWidget(self.chk_reflect_y)
+        # self.chk_reflect_y = QtWidgets.QCheckBox("Reflect Y (Altair)")
+        # self.chk_reflect_y.setChecked(True)  # default keeps current behavior
+        # plot_layout.addWidget(self.chk_reflect_y)
 
         # Altair controls (simplified)
         gb_alt = QtWidgets.QGroupBox("Altair (interactive, browser)")
@@ -545,10 +545,10 @@ class MainWindow(QtWidgets.QMainWindow):
         ag.addWidget(self.btn_plot_altair, 2, 0, 1, 5)
         ag.addWidget(self.chk_altair_large, 3, 0, 1, 5)
         
-        #Added for Altair fix
-        self.chk_reflect_y = QtWidgets.QCheckBox("Reflect Y (Altair)")
-        self.chk_reflect_y.setChecked(True)
-        plot_layout.addWidget(self.chk_reflect_y)
+        # #Added for Altair fix
+        # self.chk_reflect_y = QtWidgets.QCheckBox("Reflect Y (Altair)")
+        # self.chk_reflect_y.setChecked(True)
+        # plot_layout.addWidget(self.chk_reflect_y)
 
         # Recording info
         gb_info = QtWidgets.QGroupBox("Recording info")
