@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import sys
 import subprocess
+import json
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional, Tuple
@@ -96,7 +98,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._plot_tab_layout = None  # set in _build_ui
 
 
-        self.plotter = PlotController()
+        #self.plotter = PlotController()
+        self.plotter = PlotController(self)
 
         self._build_ui()
         self._wire_signals()
@@ -444,13 +447,24 @@ class MainWindow(QtWidgets.QMainWindow):
         pg2.addWidget(self.preview_residuals, 1, 0)
         pg2.addWidget(self.preview_overlay, 1, 1)
 
-        hb_open = QtWidgets.QHBoxLayout()
         self.btn_open_residuals = QtWidgets.QPushButton("Open residuals…")
         self.btn_open_overlay = QtWidgets.QPushButton("Open overlay…")
         self.btn_open_residuals.setEnabled(False)
         self.btn_open_overlay.setEnabled(False)
         pg2.addWidget(self.btn_open_residuals, 2, 0)
         pg2.addWidget(self.btn_open_overlay, 2, 1)
+
+        # Run selector (show last 10 calibration runs under Runs base dir)
+        self.lbl_cal_run = QtWidgets.QLabel("Select run:")
+        self.cmb_cal_run = QtWidgets.QComboBox()
+        self.cmb_cal_run.setMinimumContentsLength(40)
+        self.cmb_cal_run.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents if hasattr(QtWidgets.QComboBox, "AdjustToContents") else QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.btn_refresh_runs = QtWidgets.QPushButton("Refresh runs")
+        hb_runs = QtWidgets.QHBoxLayout()
+        hb_runs.addWidget(self.cmb_cal_run, 1)
+        hb_runs.addWidget(self.btn_refresh_runs)
+        pg2.addWidget(self.lbl_cal_run, 3, 0)
+        pg2.addLayout(hb_runs, 3, 1)
 
         self.log_cal = QtWidgets.QPlainTextEdit()
         self.log_cal.setReadOnly(True)
@@ -489,6 +503,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.chk_undock_plot.setChecked(False)
         plot_layout.addWidget(self.chk_equal_axes)
         plot_layout.addWidget(self.chk_undock_plot)
+        
+        # NEW: Reflect-Y toggle for Altair projection
+        # self.chk_reflect_y = QtWidgets.QCheckBox("Reflect Y (Altair)")
+        # self.chk_reflect_y.setChecked(True)  # default keeps current behavior
+        # plot_layout.addWidget(self.chk_reflect_y)
 
         # Altair controls (simplified)
         gb_alt = QtWidgets.QGroupBox("Altair (interactive, browser)")
@@ -525,6 +544,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         ag.addWidget(self.btn_plot_altair, 2, 0, 1, 5)
         ag.addWidget(self.chk_altair_large, 3, 0, 1, 5)
+        
+        # #Added for Altair fix
+        # self.chk_reflect_y = QtWidgets.QCheckBox("Reflect Y (Altair)")
+        # self.chk_reflect_y.setChecked(True)
+        # plot_layout.addWidget(self.chk_reflect_y)
 
         # Recording info
         gb_info = QtWidgets.QGroupBox("Recording info")
@@ -589,6 +613,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # keep settings and run tab in sync for runs base
         self.ed_runs_base.textChanged.connect(self.ed_runs_base_settings.setText)
+        self.ed_runs_base.textChanged.connect(self._on_runs_base_changed)
         self.ed_runs_base_settings.textChanged.connect(self.ed_runs_base.setText)
 
         # output preview updates
@@ -614,6 +639,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_cal_openlabel.clicked.connect(self._pick_cal_openlabel)
         self.btn_open_residuals.clicked.connect(lambda: self._open_calibration_image(self._cal_residuals_png, "Residuals"))
         self.btn_open_overlay.clicked.connect(lambda: self._open_calibration_image(self._cal_overlay_png, "Overlay"))
+        self.cmb_cal_run.currentIndexChanged.connect(self._on_cal_run_selected)
+        self.btn_refresh_runs.clicked.connect(lambda: self._refresh_runs_dropdown(select_latest=False))
 
         # run calibration
         self.btn_cal_run.clicked.connect(self._run_calibrate)
@@ -853,18 +880,156 @@ class MainWindow(QtWidgets.QMainWindow):
         win.show()
         self._image_viewers.append(win)
 
-    def _update_calibration_previews(self, result: Optional[CalibrateResult]):
-        """Update preview widgets from the latest calibration result."""
-        self._cal_residuals_png = None
-        self._cal_overlay_png = None
-        if result is not None:
-            self._cal_residuals_png = result.residuals_png_path
-            self._cal_overlay_png = result.overlay_png_path
+    def _update_calibration_previews(self, residuals_path: Optional[str], overlay_path: Optional[str]):
+        self._cal_residuals_png = residuals_path
+        self._cal_overlay_png = overlay_path
         if hasattr(self, "preview_residuals"):
             self._set_preview_image(self.preview_residuals, self._cal_residuals_png)
             self._set_preview_image(self.preview_overlay, self._cal_overlay_png)
             self.btn_open_residuals.setEnabled(bool(self._cal_residuals_png and Path(self._cal_residuals_png).is_file()))
             self.btn_open_overlay.setEnabled(bool(self._cal_overlay_png and Path(self._cal_overlay_png).is_file()))
+
+    def _load_calibration_artifacts_from_run_dir(self, run_dir: str):
+        """Try to load residual/overlay PNGs from a given run directory."""
+        p = Path(run_dir)
+        if not p.exists():
+            self._update_calibration_previews(None, None)
+            return
+        summary = p / "run_summary.json"
+        resid = None
+        over = None
+        try:
+            if summary.is_file():
+                d = json.loads(summary.read_text(encoding="utf-8"))
+                if str(d.get("command", "")) == "calibrate":
+                    resid = d.get("residuals_png_path")
+                    over = d.get("overlay_png_path")
+        except Exception:
+            pass
+        out_dir = p / "outputs"
+        if resid is None and out_dir.is_dir():
+            cand = sorted(out_dir.glob("*_homography_fit_residuals.png"))
+            if cand:
+                resid = str(cand[-1])
+        if over is None and out_dir.is_dir():
+            cand = sorted(out_dir.glob("*_overlay_markers_on_image.png"))
+            if cand:
+                over = str(cand[-1])
+        self._update_calibration_previews(resid, over)
+
+    def _find_latest_calibration_run_in_base(self, base_dir: str) -> Optional[str]:
+        """Find the newest run folder (by mtime) under base_dir that looks like a calibrate run."""
+        b = Path(base_dir)
+        if (not base_dir) or (not b.is_dir()):
+            return None
+        cands = []
+        for d in b.iterdir():
+            if not d.is_dir():
+                continue
+            if "_calibrate_" in d.name or d.name.endswith("_calibrate"):
+                cands.append(d)
+            else:
+                # also accept any run folder with calibrate summary
+                s = d / "run_summary.json"
+                if s.is_file():
+                    try:
+                        dd = json.loads(s.read_text(encoding="utf-8"))
+                        if str(dd.get("command", "")) == "calibrate":
+                            cands.append(d)
+                    except Exception:
+                        pass
+        if not cands:
+            return None
+        cands.sort(key=lambda p: p.stat().st_mtime)
+        return str(cands[-1])
+
+    def _on_runs_base_changed(self, _txt: str):
+        """When runs base changes, refresh run dropdown and preview latest run."""
+        self._refresh_runs_dropdown(select_latest=True)
+    def _list_calibration_runs(self, base_dir: str):
+        """Return list of (run_dir, display_text, mtime) for the 10 most recent calibration runs."""
+        b = Path(base_dir)
+        if not base_dir or not b.is_dir():
+            return []
+        items = []
+        ts_re = re.compile(r"^(\d{4}-\d{2}-\d{2}_\d{6})")
+        for d in b.iterdir():
+            if not d.is_dir():
+                continue
+            summary = d / "run_summary.json"
+            if not summary.is_file():
+                continue
+            try:
+                j = json.loads(summary.read_text(encoding="utf-8"))
+                if str(j.get("command", "")) != "calibrate":
+                    continue
+                base_name = str(j.get("base_name", "")) or str(j.get("baseName", ""))
+                rmse = j.get("rmse_m", None)
+                inliers = j.get("inliers_count", None)
+                m = ts_re.search(d.name)
+                ts = m.group(1) if m else d.name
+                metric_txt = ""
+                try:
+                    if rmse is not None:
+                        metric_txt += f"rmse={float(rmse):.3f}m"
+                except Exception:
+                    pass
+                try:
+                    if inliers is not None:
+                        if metric_txt:
+                            metric_txt += ", "
+                        metric_txt += f"inliers={int(inliers)}"
+                except Exception:
+                    pass
+                disp = ts
+                tail = ""
+                if base_name:
+                    tail += base_name
+                if metric_txt:
+                    tail += (" " if tail else "") + f"({metric_txt})"
+                if tail:
+                    disp = f"{ts} — {tail}"
+                items.append((str(d), disp, d.stat().st_mtime))
+            except Exception:
+                continue
+        items.sort(key=lambda t: t[2], reverse=True)
+        return items[:10]
+
+    def _refresh_runs_dropdown(self, select_latest: bool = True):
+        """Populate the run dropdown and optionally auto-select latest."""
+        if not hasattr(self, "cmb_cal_run"):  # UI not built
+            return
+        base = self.ed_runs_base.text().strip()
+        items = self._list_calibration_runs(base)
+        self.cmb_cal_run.blockSignals(True)
+        self.cmb_cal_run.clear()
+        self._cal_run_dirs = []
+        for run_dir, disp, _mt in items:
+            self.cmb_cal_run.addItem(disp)
+            self._cal_run_dirs.append(run_dir)
+        if not items:
+            self.cmb_cal_run.addItem("(no calibration runs found)")
+            self._cal_run_dirs = []
+        self.cmb_cal_run.blockSignals(False)
+        if select_latest and self._cal_run_dirs:
+            self.cmb_cal_run.setCurrentIndex(0)
+            self._load_calibration_artifacts_from_run_dir(self._cal_run_dirs[0])
+
+    def _on_cal_run_selected(self, idx: int):
+        dirs = getattr(self, "_cal_run_dirs", [])
+        if idx < 0 or idx >= len(dirs):
+            return
+        self._load_calibration_artifacts_from_run_dir(dirs[idx])
+
+    def _select_run_in_dropdown(self, run_dir: str):
+        dirs = getattr(self, "_cal_run_dirs", [])
+        if not dirs or not hasattr(self, "cmb_cal_run"):  # UI not built
+            return
+        try:
+            i = dirs.index(run_dir)
+            self.cmb_cal_run.setCurrentIndex(i)
+        except ValueError:
+            pass
     # ---------------- Run tab: conversion ----------------
 
     def _update_output_preview(self):
@@ -994,6 +1159,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_plot_buttons()
 
     def _open_last_run(self):
+        if self._last_run_dir:
+            self._load_calibration_artifacts_from_run_dir(self._last_run_dir)
+            self._select_run_in_dropdown(self._last_run_dir)
         if not self._last_run_dir:
             return
         _open_in_file_manager(self._last_run_dir)
@@ -1038,7 +1206,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_settings()
         self.log_cal.appendPlainText("\n" + "=" * 80)
         self.log_cal.appendPlainText("Starting calibration…")
-        self._update_calibration_previews(None)
 
         self.btn_cal_run.setEnabled(False)
         self.btn_cal_cancel.setEnabled(True)
@@ -1069,7 +1236,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         result: CalibrateResult = obj
-        self._update_calibration_previews(result)
+        self._update_calibration_previews(result.residuals_png_path, result.overlay_png_path)
         self._last_run_dir = result.run_dir
         self.btn_open_run.setEnabled(True)
 
