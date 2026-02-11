@@ -7,9 +7,15 @@
 
 <h1 align="center">COSMO OpenLABEL → Omega-Prime</h1>
 
+[![CI](https://github.com/RI-SE/ORBIT/actions/workflows/ci.yml/badge.svg)](https://github.com/RI-SE/ORBIT/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![OpenDrive](https://img.shields.io/badge/OpenDRIVE-1.8-orange)](https://www.asam.net/standards/detail/opendrive/)
 
 <p align="center">
 A visual tool for convert ASAM OpenLABEL annotations to Omega-Prime.
+
+
 </p>
 
 > [!NOTE]
@@ -20,10 +26,6 @@ A visual tool for convert ASAM OpenLABEL annotations to Omega-Prime.
 > This is a beta version. Bugs and missing features should be expected. Github issues can be added for bug reports or feature requests.
 
 ---
-
-
-> ⚠️ **Licensing notice:** The license for this repository is currently **TBD**.  
-> Until finalized, **all rights are reserved**. See `LICENSE-TBD.md`.
 
 ## Contents
 
@@ -38,13 +40,59 @@ A visual tool for convert ASAM OpenLABEL annotations to Omega-Prime.
 
 ---
 
+## Features
 
+COSMO is a small toolset for converting ASAM OpenLABEL annotations into:
+- **Omega-Prime compatible CSV** (moving-object table), and optionally
+- **MCAP containing ASAM OSI GroundTruth**, optionally bundled with an OpenDRIVE map. [3](https://huggingface.co/DavidAU/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-GGUF/blob/main/README.md)[1](https://opensource.stackexchange.com/questions/11970/is-license-mentioned-in-readme-enough)
 
 
 Input:
 * An OpenLABEL files
 * An OpenDRIVE file
 * An Calibration.json file to align the OpenLABEL and the OpenDRIVE file
+
+## Installation
+
+### Using uv (recommended) 
+TBI
+
+```bash
+# Install uv if needed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone and install
+git clone <repository-url>
+cd ORBIT
+uv sync
+```
+
+### Using pip
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -e .
+```
+
+### Using conda
+
+```bash
+conda env create --file environment.yml
+conda activate cosmo
+pip install -e .
+```
+
+---
+## Quick start (GUI)
+
+### 1) Create environment (Conda, recommended for internal use)
+```bash
+conda env create -f environment.yml
+conda activate cosmo
+
+
+
 
 The conversion is done running the file "convert_openlabel_to_omega.py"
 
@@ -88,31 +136,6 @@ Depending on image size it may be necessary to rescale the point2pixel. That may
 
 
 
-# OL2OP PyQt6 GUI
-
-This is a lightweight PyQt6 front-end for the **OpenLABEL + OpenDRIVE → Omega-Prime** converter.
-
-It is intended to be used alongside the updated converter script **`convert_openlabel_to_omega.py`**.
-
-## Files
-
-- `ol2op_gui.py` — the GUI application.
-- `convert_openlabel_to_omega.py` — the converter (run by the GUI as a subprocess).
-
-## Install
-
-```bash
-pip install PyQt6
-# Optional (only needed if you want MCAP output):
-pip install betterosi
-```
-
-## Run
-
-```bash
-python ol2op_gui.py
-```
-
 ## Notes
 
 - The GUI stores your last-used paths and settings using `QSettings`.
@@ -123,19 +146,6 @@ python ol2op_gui.py
   - refactor the worker to import and call `convert_openlabel_to_omega()` directly.
 
 
-# SAVANTPostProcessing
-Temporary repro for experiments for SAVANT postprocessing
-
-ISO 8855 for cooredinate systems is available here for RISE: https://www.sis.se/api/document/get/82643
-A local copy for RSIE DTS is stored on our sharepoint: https://risecloud.sharepoint.com/:b:/r/sites/PlitligaTransportsystem/Delade%20dokument/Dokument/Standarder/SS_ISO_8855_2011_EN.pdf?csf=1&web=1&e=hDD4Eh
-
-# Using ORBIT `xxx_georef_data.json` in `convert_openlabel_to_omega.py`
-
-This note explains **how the ORBIT georeferencing export is used** to align OpenLABEL detections with an ORBIT-generated OpenDRIVE map, and **how to run the converter**.
-
-> Scope: This describes the updated converter that supports `--georef-data` (ORBIT export) and keeps legacy `--calibration` support. citeturn2file51
-
----
 
 ## 1. Background: what the converter does
 
@@ -362,39 +372,6 @@ In the ORBIT georef export you should find:
 
 
 
-## License
-
-**License: TBD (to be decided).**
-
-This repository is intended to be made available under an open-source license, but the exact license is currently under discussion within the project consortium.
-
-Until the license is finalized and a license file is added, all rights are reserved and no permission is granted to use, modify, or redistribute this code beyond what is permitted by applicable law.
-
-See: `LICENSE-TBD.md`.
-
-
-## Acknowledgements
-
-This work has been developed within an EU-funded project in the same program context as the SAVANT tooling.
-
-**Funding and consortium acknowledgement text: TBD**  
-(Will be added once the final wording is confirmed by the consortium.)
-
-## License
-
-**License: TBD (under review).**
-
-Until the licensing terms are finalized and a license is published in this repository, **all rights are reserved** and no permission is granted to use, modify, or redistribute this code beyond what is permitted by applicable law.
-
-See: `LICENSE-TBD.md`.
-``
-
-
-# COSMO — OpenLABEL → OSI/MCAP + Omega-Prime CSV (with GUI)
-
-COSMO is a small toolset for converting ASAM OpenLABEL annotations into:
-- **Omega-Prime compatible CSV** (moving-object table), and optionally
-- **MCAP containing ASAM OSI GroundTruth**, optionally bundled with an OpenDRIVE map. [3](https://huggingface.co/DavidAU/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-GGUF/blob/main/README.md)[1](https://opensource.stackexchange.com/questions/11970/is-license-mentioned-in-readme-enough)
 
 The recommended entry point is the **COSMO Converter GUI**, which wraps the conversion script and provides a calibration helper tab. [1](https://opensource.stackexchange.com/questions/11970/is-license-mentioned-in-readme-enough)
 
@@ -449,18 +426,6 @@ COSMO provides a GUI-first workflow for converting ASAM OpenLABEL annotations in
 - **MCAP containing ASAM OSI GroundTruth** (requires optional dependency). [3](https://huggingface.co/DavidAU/Qwen3-48B-A4B-Savant-Commander-Distill-12X-Closed-Open-Heretic-Uncensored-GGUF/blob/main/README.md)[1](https://opensource.stackexchange.com/questions/11970/is-license-mentioned-in-readme-enough)
 
 The GUI wraps the conversion script and also provides a calibration helper tab. [1](https://opensource.stackexchange.com/questions/11970/is-license-mentioned-in-readme-enough)
-
----
-
-## Quick start (GUI)
-
-### 1) Create environment (Conda, recommended for internal use)
-```bash
-conda env create -f environment.yml
-conda activate cosmo
-
-
-
 ---
 
 ## License
