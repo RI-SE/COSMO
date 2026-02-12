@@ -7,6 +7,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
       matrix:
@@ -30,13 +31,28 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
-      - name: Run tests
+      # Optional but recommended: verifies console scripts + dispatch without launching GUI.
+      # NOTE: calling plain `cosmo` (no args) attempts to start the GUI by default. [2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)
+      - name: CLI sanity check (no GUI)
+        run: |
+          cosmo --version
+          cosmo convert --help
+          cosmo calibrate --help
+
+      # Run smoke tests first for fast feedback, then run the rest (skip smoke).
+      - name: Run smoke tests (CLI / entrypoints)
         env:
           MPLBACKEND: Agg
-        run: pytest -q
+        run: pytest -q -m smoke
+
+      - name: Run full test suite (skip smoke)
+        env:
+          MPLBACKEND: Agg
+        run: pytest -q -m "not smoke"
 
       - name: Build wheel/sdist
         run: |
           python -m pip install build
           python -m build
           ls -la dist
+          
