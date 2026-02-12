@@ -289,3 +289,4 @@ class PlotController:
         except Exception: pass
 
         chart.show()
+    
