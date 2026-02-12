@@ -63,9 +63,10 @@ minversion = "7.0"
 testpaths = ["tests"]
 
 # Register markers to avoid warnings and keep CI strict/clean
+
 markers = [
   "smoke: fast CLI smoke tests (calibrate/convert/entrypoints) that can be filtered",
-  "integration: slower end-to-end tests (optional in CI)",
+  "integration: end-to-end tests requiring optional deps (e.g. betterosi/MCAP) or heavier assets",
 ]
 
 # Optional quality-of-life defaults:

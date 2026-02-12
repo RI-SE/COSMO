@@ -45,14 +45,33 @@ jobs:
           MPLBACKEND: Agg
         run: pytest -q -m smoke
 
-#      - name: Run full test suite (skip smoke)
-#        env:
-#          MPLBACKEND: Agg
-#        run: pytest -q -m "not smoke"
+      - name: Run full test suite (skip smoke)
+        env:
+          MPLBACKEND: Agg
+        run: pytest -q -m "not smoke"
 
       - name: Build wheel/sdist
         run: |
           python -m pip install build
           python -m build
           ls -la dist
-          
+
+  integration:
+    name: Integration (MCAP)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package + dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+          # ensure optional deps are available
+          python -m pip install betterosi mcap
+      - name: Run integration tests
+        env:
+          MPLBACKEND: Agg
+        run: pytest -q -m integration
