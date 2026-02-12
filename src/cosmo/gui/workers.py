@@ -74,3 +74,4 @@ class CalibrateWorker(QtCore.QThread):
             self.finished.emit(result)
         except Exception as e:
             self.finished.emit(e)
+    
