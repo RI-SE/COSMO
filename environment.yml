@@ -13,7 +13,7 @@ dependencies:
   - altair
   - pandera
   - numpy
-  - python[version='<3.13']
+  - python[version='<=3.13.5']
   - lxml
   - grpclib
   - rich

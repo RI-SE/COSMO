@@ -1,14 +1,13 @@
 # src/cosmo/gui/main_window.py
 from __future__ import annotations
 
-import os
-import sys
-import subprocess
 import json
+import os
 import re
-from dataclasses import asdict
+import subprocess
+import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 # Qt binding selection: PyQt5 → PySide6 → PyQt6 (same as your current GUI). [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/convert_openlabel_to_omega.py)
 try:
@@ -22,18 +21,34 @@ except ImportError:  # pragma: no cover
         from PyQt6 import QtCore, QtGui, QtWidgets
         _QT_API = "PyQt6"
 
-from cosmo.app.convert_app import ConvertConfig, ConvertResult
 from cosmo.app.calibrate_app import CalibrateConfig, CalibrateResult
-from cosmo.gui.workers import ConvertWorker, CalibrateWorker
-from cosmo.gui.plotting import PlotController
-from cosmo.gui.pixel_pairs_editor import PixelPairsEditorDialog
+from cosmo.app.convert_app import ConvertConfig, ConvertResult
 from cosmo.gui.image_viewer import ImageViewerWindow
-from cosmo.gui.marker_converter import detect_odr_utm_with_offset, convert_visual_markers_latlon_to_odr_local
-
+from cosmo.gui.marker_converter import (
+    convert_visual_markers_latlon_to_odr_local,
+    detect_odr_utm_with_offset,
+)
+from cosmo.gui.pixel_pairs_editor import PixelPairsEditorDialog
+from cosmo.gui.plotting import PlotController
+from cosmo.gui.workers import CalibrateWorker, ConvertWorker
 
 APP_NAME = "COSMO"
 ORG_NAME = "SYNERGIES"
 SETTINGS_GROUP = "cosmo_gui"
+
+def _find_logo_png() -> Optional[Path]:
+    """Locate the COSMO logo PNG in the repository layout.
+
+    Expected layout: <repo_root>/logo/cosmo_logo.png (as per Repro_root/logo).
+    We search upwards from this file location to keep it robust for dev runs.
+    """
+    here = Path(__file__).resolve()
+    for p in (here.parent, *here.parents):
+        cand = p / 'logo' / 'cosmo_logo.png'
+        if cand.is_file():
+            return cand
+    return None
+
 
 
 def _open_in_file_manager(path: str) -> None:
@@ -116,14 +131,47 @@ class MainWindow(QtWidgets.QMainWindow):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
-        header = QtWidgets.QLabel(
+        # --- Header with PNG logo + text ---
+        header_widget = QtWidgets.QWidget()
+        hl = QtWidgets.QHBoxLayout(header_widget)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(12)
+
+        self.lbl_logo = QtWidgets.QLabel()
+        self.lbl_logo.setFixedSize(56, 56)  # adjust as desired
+        self.lbl_logo.setAlignment(
+            QtCore.Qt.AlignTop if hasattr(QtCore.Qt, 'AlignTop') else QtCore.Qt.AlignmentFlag.AlignTop
+        )
+
+        logo_path = _find_logo_png()
+        if logo_path is not None:
+            pm = QtGui.QPixmap(str(logo_path))
+            if not pm.isNull():
+                # HiDPI-friendly scaling
+                dpr = float(getattr(self, 'devicePixelRatioF', lambda: 1.0)())
+                w = max(1, int(self.lbl_logo.width() * dpr))
+                h = max(1, int(self.lbl_logo.height() * dpr))
+                scaled = pm.scaled(w, h, _qt_keep_aspect_ratio(), _qt_smooth_transform())
+                try:
+                    scaled.setDevicePixelRatio(dpr)
+                except Exception:
+                    pass
+                self.lbl_logo.setPixmap(scaled)
+
+        header_text = QtWidgets.QLabel(
             "<h2 style='margin:0'>COSMO</h2>"
             "<div style='color:#555'>Convert OpenLABEL → Omega-Prime CSV and OSI/MCAP, and compute calibration</div>"
         )
-        header.setTextFormat(QtCore.Qt.RichText if hasattr(QtCore.Qt, "RichText") else QtCore.Qt.TextFormat.RichText)
-        root.addWidget(header)
+        header_text.setTextFormat(
+            QtCore.Qt.RichText if hasattr(QtCore.Qt, 'RichText') else QtCore.Qt.TextFormat.RichText
+        )
+
+        hl.addWidget(self.lbl_logo, 0)
+        hl.addWidget(header_text, 1)
+        root.addWidget(header_widget)
 
         self.tabs = QtWidgets.QTabWidget()
+
         root.addWidget(self.tabs, 1)
 
         # ----- Run tab
@@ -503,7 +551,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.chk_undock_plot.setChecked(False)
         plot_layout.addWidget(self.chk_equal_axes)
         plot_layout.addWidget(self.chk_undock_plot)
-        
+
         # NEW: Reflect-Y toggle for Altair projection
         # self.chk_reflect_y = QtWidgets.QCheckBox("Reflect Y (Altair)")
         # self.chk_reflect_y.setChecked(True)  # default keeps current behavior
@@ -544,7 +592,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         ag.addWidget(self.btn_plot_altair, 2, 0, 1, 5)
         ag.addWidget(self.chk_altair_large, 3, 0, 1, 5)
-        
+
         # #Added for Altair fix
         # self.chk_reflect_y = QtWidgets.QCheckBox("Reflect Y (Altair)")
         # self.chk_reflect_y.setChecked(True)

@@ -6,7 +6,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Callable
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -165,7 +165,6 @@ def ransac_homography(
         raise ValueError("Need at least 4 correspondences for homography.")
 
     rng = np.random.default_rng(seed)
-    best_H = None
     best_inliers = None
     best_rmse = float("inf")
 
@@ -183,7 +182,6 @@ def ransac_homography(
             rmse = float(np.sqrt(np.mean(np.sum((pred[inliers] - world[inliers]) ** 2, axis=1))))
             if best_inliers is None or rmse < best_rmse or len(inliers) > len(best_inliers):
                 best_rmse = rmse
-                best_H = H_try
                 best_inliers = inliers
 
     if best_inliers is not None and len(best_inliers) >= 4:
@@ -251,8 +249,8 @@ def _save_residuals_plot_agg(
     """
     Save residual plot using Agg backend directly (no pyplot, no GUI).
     """
-    from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+    from matplotlib.figure import Figure
 
     fig = Figure(figsize=(8, 6))
     FigureCanvas(fig)
@@ -293,8 +291,8 @@ def _save_overlay_plot_agg(
     """
     Save overlay plot using Agg backend directly (no pyplot, no GUI).
     """
-    from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+    from matplotlib.figure import Figure
 
     w, h = img.size
 
