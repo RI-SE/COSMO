@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence, List, Any
+from typing import Any, List, Optional, Sequence
 
 # Optional deps: omega_prime and altair are optional (same as your current GUI)
 try:
@@ -210,8 +210,9 @@ class PlotController:
         canvas.draw()
 
         # Convert RGBA buffer to PNG bytes via Pillow
-        from PIL import Image as PILImage
         import io
+
+        from PIL import Image as PILImage
 
         w, h = fig.canvas.get_width_height()
         buf = canvas.buffer_rgba()
@@ -289,4 +290,4 @@ class PlotController:
         except Exception: pass
 
         chart.show()
-    
+

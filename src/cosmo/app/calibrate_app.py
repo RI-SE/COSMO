@@ -17,10 +17,9 @@ import json
 import re
 import sys
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Optional, Any, List
-
+from typing import Any, Callable, List, Optional
 
 LogFn = Callable[[str], None]
 

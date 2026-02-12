@@ -1,14 +1,13 @@
 # src/cosmo/gui/main_window.py
 from __future__ import annotations
 
-import os
-import sys
-import subprocess
 import json
+import os
 import re
-from dataclasses import asdict
+import subprocess
+import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 # Qt binding selection: PyQt5 → PySide6 → PyQt6 (same as your current GUI). [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/convert_openlabel_to_omega.py)
 try:
@@ -22,14 +21,16 @@ except ImportError:  # pragma: no cover
         from PyQt6 import QtCore, QtGui, QtWidgets
         _QT_API = "PyQt6"
 
-from cosmo.app.convert_app import ConvertConfig, ConvertResult
 from cosmo.app.calibrate_app import CalibrateConfig, CalibrateResult
-from cosmo.gui.workers import ConvertWorker, CalibrateWorker
-from cosmo.gui.plotting import PlotController
-from cosmo.gui.pixel_pairs_editor import PixelPairsEditorDialog
+from cosmo.app.convert_app import ConvertConfig, ConvertResult
 from cosmo.gui.image_viewer import ImageViewerWindow
-from cosmo.gui.marker_converter import detect_odr_utm_with_offset, convert_visual_markers_latlon_to_odr_local
-
+from cosmo.gui.marker_converter import (
+    convert_visual_markers_latlon_to_odr_local,
+    detect_odr_utm_with_offset,
+)
+from cosmo.gui.pixel_pairs_editor import PixelPairsEditorDialog
+from cosmo.gui.plotting import PlotController
+from cosmo.gui.workers import CalibrateWorker, ConvertWorker
 
 APP_NAME = "COSMO"
 ORG_NAME = "SYNERGIES"
@@ -550,7 +551,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.chk_undock_plot.setChecked(False)
         plot_layout.addWidget(self.chk_equal_axes)
         plot_layout.addWidget(self.chk_undock_plot)
-        
+
         # NEW: Reflect-Y toggle for Altair projection
         # self.chk_reflect_y = QtWidgets.QCheckBox("Reflect Y (Altair)")
         # self.chk_reflect_y.setChecked(True)  # default keeps current behavior
@@ -591,7 +592,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         ag.addWidget(self.btn_plot_altair, 2, 0, 1, 5)
         ag.addWidget(self.chk_altair_large, 3, 0, 1, 5)
-        
+
         # #Added for Altair fix
         # self.chk_reflect_y = QtWidgets.QCheckBox("Reflect Y (Altair)")
         # self.chk_reflect_y.setChecked(True)
