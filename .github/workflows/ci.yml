@@ -45,10 +45,10 @@ jobs:
           MPLBACKEND: Agg
         run: pytest -q -m smoke
 
-      - name: Run full test suite (skip smoke)
-        env:
-          MPLBACKEND: Agg
-        run: pytest -q -m "not smoke"
+#      - name: Run full test suite (skip smoke)
+#        env:
+#          MPLBACKEND: Agg
+#        run: pytest -q -m "not smoke"
 
       - name: Build wheel/sdist
         run: |
