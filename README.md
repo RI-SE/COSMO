@@ -1,12 +1,12 @@
 
 <p align="center">
   <picture>
-    <source srcset="docs/images/cosmo_logo_with_text.drawio.svg" type="image/svg+xml">
-    <img src="docs/images/cosmo_logo_with_text.drawio.png" width="260" alt="COSMO logo" />
+    <source srcset="logo/cosmo_logo.svg" type="image/svg+xml">
+    <img src="logo/cosmo_logo.png" width="260" alt="COSMO logo" />
   </picture>
 </p>
 
-# COSMO — Convert OpenLABEL to OSI + OpenDRIVE map to Omega‑Prime
+# COSMO — OpenLABEL → Omega‑Prime (CSV) + optional OSI/MCAP
 
 [![CI](https://github.com/MickOls/COSMO/actions/workflows/ci.yml/badge.svg)](https://github.com/MickOls/COSMO/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -110,7 +110,7 @@ cosmo convert scenario.json \
 * MCAP output requires betterosi. If MCAP is requested but betterosi is missing, COSMO logs that it will write CSV only.
 * MCAP topics written:
   - ground_truth_map (OpenDRIVE, if provided)
-  - ground_truth (OSI GroundTruth per frame)
+  - ground_truth (OSI GroundTruth per frame) [risecloud-...epoint.com]
 
 ---
 
@@ -121,13 +121,13 @@ cosmo convert scenario.json \
 
 ## Acknowledgement
 <br><div align="center">
-  <img src="docs/images/synergies.svg" alt="Synergies logo" width="200"/>
+  <img src="docs/synergies.svg" alt="Synergies logo" width="200"/>
 </div>
 
 This package is developed as part of the [SYNERGIES](https://synergies-ccam.eu/) project.
 
 <br><div align="center">
-  <img src="docs/images/funded_by_eu.svg" alt="Funded by EU" width="200"/>
+  <img src="docs/funded_by_eu.svg" alt="Funded by EU" width="200"/>
 </div>
 
 Funded by the European Union. Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or European Climate, Infrastructure and Environment Executive Agency (CINEA). Neither the European Union nor the granting authority can be held responsible for them.
