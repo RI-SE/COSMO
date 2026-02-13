@@ -1,20 +1,40 @@
 
+<p align="center">
+  <picture>
+    <source srcset="logo/cosmo_logo.svg" type="image/svg+xml">
+    <img src="logo/cosmo_logo.png" width="260" alt="COSMO logo" />
+  </picture>
+</p>
+
 # COSMO — OpenLABEL → Omega‑Prime (CSV) + optional OSI/MCAP
 
 [![CI](https://github.com/MickOls/COSMO/actions/workflows/ci.yml/badge.svg)](https://github.com/MickOls/COSMO/actions/workflows/ci.yml)
-[![Publish](https://github.com/MickOls/COSMO/actions/workflows/publish.yml/badge.svg)](https://github.com/MickOls/COSMO/actions/workflows/publish.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 ![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-blue)
-![License](https://img.shields.io/badge/license-TBD-lightgrey)
+[![OpenDrive](https://img.shields.io/badge/OpenDRIVE-1.8-orange)](https://www.asam.net/standards/detail/opendrive/)
+[![OpenLABEL](https://img.shields.io/badge/OpenLABEL-1.0-orange)](https://www.asam.net/standards/detail/openlabel/)
+[![Omega‑Prime](https://img.shields.io/badge/Omega--Prime-0.2.0-orange)](https://github.com/ika-rwth-aachen/omega-prime)
 
 COSMO converts **ASAM OpenLABEL** annotations into:
 
 - **Omega‑Prime compatible CSV** (moving-object table)
 - optionally **MCAP** containing **ASAM OSI GroundTruth**, optionally bundled with an **OpenDRIVE** map.
 
+![COSMO main window](docs/images/screenshot_main_window.png)
+
+ [!NOTE]
+> This is a beta version. Bugs and missing features should be expected. Github issues can be added for bug reports or feature requests.
+
 > Maintained by **RISE Research Institutes of Sweden**. Developed in the SYNERGIES project.
 
 ---
-
+## Documentation (quick links)
+- [Docs index](docs/README.md)
+- [Quickstart](docs/getting-started/quickstart.md)
+- [CLI](docs/user-guide/cli.md)
+- [Outputs (CSV/MCAP)](docs/reference/outputs-omega-prime.md)
+- [Troubleshooting](docs/how-to/troubleshooting.md)
+---
 ## Quick start (recommended: ORBIT georef)
 
 Install (editable + dev tools):
@@ -83,15 +103,6 @@ cosmo convert scenario.json \
   - docs/reference/outputs-omega-prime.md
   - docs/reference/osi-mcap.md
 
-
-## Documentation (quick links)
-- [Docs index](docs/README.md)
-- [Quickstart](docs/getting-started/quickstart.md)
-- [CLI](docs/user-guide/cli.md)
-- [Outputs (CSV/MCAP)](docs/reference/outputs-omega-prime.md)
-- [Troubleshooting](docs/how-to/troubleshooting.md)
-
-
 ---
 
 ## OSI/MCAP notes
@@ -103,7 +114,20 @@ cosmo convert scenario.json \
 
 ---
 
-## Status & license
+## Status and License
 
 - Beta.
-- License is TBD — see LICENSE-TBD.md
+- ORBIT is licensed under the [GNU General Public License v3.0 (GPL-3.0)](LICENSE).
+
+## Acknowledgement
+<br><div align="center">
+  <img src="docs/synergies.svg" alt="Synergies logo" width="200"/>
+</div>
+
+This package is developed as part of the [SYNERGIES](https://synergies-ccam.eu/) project.
+
+<br><div align="center">
+  <img src="docs/funded_by_eu.svg" alt="Funded by EU" width="200"/>
+</div>
+
+Funded by the European Union. Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or European Climate, Infrastructure and Environment Executive Agency (CINEA). Neither the European Union nor the granting authority can be held responsible for them.
