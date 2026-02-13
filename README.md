@@ -1,8 +1,7 @@
 
 <p align="center">
   <picture>
-    <source srcset="logo/cosmo_logo.svg" type="image/svg+xml">
-    <img src="logo/cosmo_logo.png" width="260" alt="COSMO logo" />
+    <img src="src/images/cosmo_logo_with_text.drawio.png" width="700" alt="COSMO logo" />
   </picture>
 </p>
 
@@ -121,13 +120,13 @@ cosmo convert scenario.json \
 
 ## Acknowledgement
 <br><div align="center">
-  <img src="docs/synergies.svg" alt="Synergies logo" width="200"/>
+  <img src="docs/images/synergies.svg" alt="Synergies logo" width="200"/>
 </div>
 
 This package is developed as part of the [SYNERGIES](https://synergies-ccam.eu/) project.
 
 <br><div align="center">
-  <img src="docs/funded_by_eu.svg" alt="Funded by EU" width="200"/>
+  <img src="docs/images/funded_by_eu.svg" alt="Funded by EU" width="200"/>
 </div>
 
 Funded by the European Union. Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or European Climate, Infrastructure and Environment Executive Agency (CINEA). Neither the European Union nor the granting authority can be held responsible for them.
