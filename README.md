@@ -1,11 +1,12 @@
 
 <p align="center">
   <picture>
-    <img src="src/images/cosmo_logo_with_text.drawio.png" width="700" alt="COSMO logo" />
+    <source srcset="docs/images/cosmo_logo_with_text.drawio.svg" type="image/svg+xml">
+    <img src="docs/images/cosmo_logo_with_text.drawio.png" width="700" alt="COSMO logo" />
   </picture>
 </p>
 
-# COSMO — OpenLABEL → Omega‑Prime (CSV) + optional OSI/MCAP
+# COSMO - OpenLABEL + OpenDRIVE → Omega‑Prime
 
 [![CI](https://github.com/MickOls/COSMO/actions/workflows/ci.yml/badge.svg)](https://github.com/MickOls/COSMO/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
