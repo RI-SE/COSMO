@@ -39,12 +39,12 @@ SETTINGS_GROUP = "cosmo_gui"
 def _find_logo_png() -> Optional[Path]:
     """Locate the COSMO logo PNG in the repository layout.
 
-    Expected layout: <repo_root>/logo/cosmo_logo.png (as per Repro_root/logo).
+    Expected layout: <repo_root>/docs/images/cosmo_logo.png (as per Repro_root/docs/images).
     We search upwards from this file location to keep it robust for dev runs.
     """
     here = Path(__file__).resolve()
     for p in (here.parent, *here.parents):
-        cand = p / 'logo' / 'cosmo_logo.png'
+        cand = p / 'docs' / 'images' /'cosmo_logo.png'
         if cand.is_file():
             return cand
     return None
