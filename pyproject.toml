@@ -13,11 +13,14 @@ dependencies = ["numpy", "pandas", "pillow", "matplotlib"]
 
 [project.optional-dependencies]
 gui = ["PyQt5>=5.15"]
-mcap = ["betterosi"]
+mcap = ["betterosi>=0.8.1,<0.9", "betterproto2>=0.8,<0.9"]
 plot = ["omega-prime", "altair"]
-dev = ["pytest", "ruff", "pre-commit"]
 docs = ["mkdocs-material", "mkdocstrings[python]"]
 gui-fallback = ["PySide6", "PyQt6"]
+full = ["cosmo[gui,mcap,plot]"]
+
+[dependency-groups]
+dev = ["pytest", "ruff", "pre-commit"]
 
 [project.scripts]
 cosmo = "cosmo.cli.main:main"

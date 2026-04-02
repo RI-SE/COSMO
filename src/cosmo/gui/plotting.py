@@ -75,7 +75,7 @@ class PlotController:
         if self._cache_path == mcap_path and self._cache_rec is not None:
             return self._cache_rec
 
-        rec = op.Recording.from_file(mcap_path)
+        rec = op.Recording.from_file(mcap_path, parse_map=True)
         self._cache_path = mcap_path
         self._cache_rec = rec
         return rec

@@ -43,6 +43,7 @@ class ConvertConfig:
     flip_y: bool = False
     xy_offset: Tuple[float, float] = (0.0, 0.0)
     yaw_offset_deg: float = 0.0
+    strip_xodr_namespace: bool = False
 
     # output control
     out_dir: Optional[str] = None  # If None => <project>/runs/<timestamp>_convert_<stem>/
@@ -215,6 +216,7 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         flip_y=cfg.flip_y,
         xy_offset=cfg.xy_offset,
         yaw_offset_rad=(cfg.yaw_offset_deg * 3.141592653589793 / 180.0),
+        strip_xodr_namespace=cfg.strip_xodr_namespace,
         log_fn=log_fn,  # << NEW
     )
 

@@ -102,6 +102,9 @@ Examples:
     ap.add_argument("--flip-y", action="store_true", help="Flip Y -> -Y after projection")
     ap.add_argument("--xy-offset", nargs=2, metavar=("DX", "DY"), help="Translate XY by DX DY meters after projection")
     ap.add_argument("--yaw-offset-deg", type=float, default=0.0, help="Yaw offset (deg CCW)")
+    ap.add_argument("--strip-xodr-namespace", action="store_true",
+                    help="Strip XML namespace declarations from OpenDRIVE before embedding in MCAP "
+                         "(workaround for omega-prime namespace-unaware XPath; disable once omega-prime adds namespace support)")
 
     # Run folder naming
     ap.add_argument("--run-name", required=False, help="Optional override for run folder name")
@@ -151,6 +154,7 @@ def main(argv=None) -> int:
         flip_y=args.flip_y,
         xy_offset=_parse_xy_offset(args.xy_offset),
         yaw_offset_deg=float(args.yaw_offset_deg or 0.0),
+        strip_xodr_namespace=args.strip_xodr_namespace,
         out_dir=args.out_dir,
         run_name=args.run_name,
     )

@@ -293,6 +293,9 @@ class MainWindow(QtWidgets.QMainWindow):
         opt.addWidget(QtWidgets.QLabel("Yaw offset (deg CCW):"), 3, 0)
         opt.addWidget(self.sp_yaw_deg, 3, 1)
 
+        self.chk_strip_xodr_ns = QtWidgets.QCheckBox("Strip namespace from OpenDRIVE (workaround for omega-prime)")
+        opt.addWidget(self.chk_strip_xodr_ns, 4, 0, 1, 2)
+
         ctrl = QtWidgets.QHBoxLayout()
         self.btn_run = QtWidgets.QPushButton("Run conversion")
         self.btn_cancel = QtWidgets.QPushButton("Cancel")
@@ -1141,6 +1144,7 @@ class MainWindow(QtWidgets.QMainWindow):
             flip_y=self.chk_flip_y.isChecked(),
             xy_offset=(float(self.sp_dx.value()), float(self.sp_dy.value())),
             yaw_offset_deg=float(self.sp_yaw_deg.value()),
+            strip_xodr_namespace=self.chk_strip_xodr_ns.isChecked(),
             out_dir=runs_base,
             run_name=None,
         )
@@ -1527,6 +1531,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sp_dx.setValue(float(self._settings.value("dx", 0.0)))
         self.sp_dy.setValue(float(self._settings.value("dy", 0.0)))
         self.sp_yaw_deg.setValue(float(self._settings.value("yaw_deg", 0.0)))
+        self.chk_strip_xodr_ns.setChecked(self._settings.value("strip_xodr_ns", False, type=bool))
 
         # Plot settings
         self.chk_equal_axes.setChecked(self._settings.value("plot_equal_axes", True, type=bool))
@@ -1561,6 +1566,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._settings.setValue("dx", float(self.sp_dx.value()))
         self._settings.setValue("dy", float(self.sp_dy.value()))
         self._settings.setValue("yaw_deg", float(self.sp_yaw_deg.value()))
+        self._settings.setValue("strip_xodr_ns", self.chk_strip_xodr_ns.isChecked())
 
         self._settings.setValue("plot_equal_axes", self.chk_equal_axes.isChecked())
         self._settings.setValue("plot_undock", self.chk_undock_plot.isChecked())

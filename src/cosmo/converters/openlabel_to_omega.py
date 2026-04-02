@@ -410,6 +410,7 @@ def convert_openlabel_to_omega(
     flip_y: bool = False,
     xy_offset: Tuple[float, float] = (0.0, 0.0),
     yaw_offset_rad: float = 0.0,
+    strip_xodr_namespace: bool = False,
     log_fn: Optional[Callable[[str], None]] = None,
 ):
     """
@@ -523,6 +524,8 @@ def convert_openlabel_to_omega(
     def _write_map(writer_mcap):
         if odr_path and os.path.isfile(odr_path):
             odr_xml = load_text(odr_path)
+            if strip_xodr_namespace:
+                odr_xml = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', "", odr_xml)
             try:
                 map_msg = betterosi.MapAsamOpenDrive(open_drive_xml_content=odr_xml)
             except TypeError:
