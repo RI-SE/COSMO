@@ -47,6 +47,51 @@ def _keep_aspect_ratio():
     return QtCore.Qt.AspectRatioMode.KeepAspectRatio
 
 
+# Qt CheckState constants (compat)
+_Qt = QtCore.Qt
+_CHECKED = _Qt.CheckState.Checked if hasattr(_Qt, "CheckState") else _Qt.Checked
+_UNCHECKED = _Qt.CheckState.Unchecked if hasattr(_Qt, "CheckState") else _Qt.Unchecked
+_PARTIAL = _Qt.CheckState.PartiallyChecked if hasattr(_Qt, "CheckState") else _Qt.PartiallyChecked
+
+_PALETTE_RGB = [
+    (220,  60,  60),
+    ( 60, 120, 220),
+    ( 60, 190,  60),
+    (220, 160,   0),
+    (160,  60, 220),
+    (  0, 190, 190),
+    (220, 100,   0),
+    (190, 190,  60),
+    (220,  60, 160),
+    (100, 160,  60),
+]
+
+
+def _make_type_colors(pairs: list[tuple[str, str]]) -> dict[tuple[str, str], QtGui.QColor]:
+    """Assign palette colors to (type_name, subtype_name) pairs."""
+    return {
+        pair: QtGui.QColor(*_PALETTE_RGB[i % len(_PALETTE_RGB)])
+        for i, pair in enumerate(pairs)
+    }
+
+
+def _set_color_swatch(item: QtWidgets.QTreeWidgetItem, color: QtGui.QColor) -> None:
+    pix = QtGui.QPixmap(12, 12)
+    pix.fill(color)
+    item.setIcon(0, QtGui.QIcon(pix))
+
+
+def _update_parent_state(parent: QtWidgets.QTreeWidgetItem) -> None:
+    n = parent.childCount()
+    checked = sum(1 for i in range(n) if parent.child(i).checkState(0) == _CHECKED)
+    if checked == 0:
+        parent.setCheckState(0, _UNCHECKED)
+    elif checked == n:
+        parent.setCheckState(0, _CHECKED)
+    else:
+        parent.setCheckState(0, _PARTIAL)
+
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -107,7 +152,10 @@ class ParkingObject:
 # ---------------------------------------------------------------------------
 
 def parse_xodr(path: str) -> tuple[list[Road], list[ParkingObject], tuple[float, float]]:
-    text = open(path, encoding="utf-8").read()
+    return parse_xodr_text(open(path, encoding="utf-8").read())
+
+
+def parse_xodr_text(text: str) -> tuple[list[Road], list[ParkingObject], tuple[float, float]]:
     text = re.sub(r'\s+xmlns="[^"]+"', "", text)
     root = ET.fromstring(text)
 
@@ -355,8 +403,52 @@ def load_trajectories(path: str) -> dict[int, dict]:
     for idx, group in df.groupby("idx"):
         xy = group[["x", "y"]].values
         type_name = group["type_name"].iloc[0] if "type_name" in group.columns else "OTHER"
-        result[int(idx)] = {"type": str(type_name), "xy": xy}
+        subtype_name = group["subtype_name"].iloc[0] if "subtype_name" in group.columns else "OTHER"
+        result[int(idx)] = {"type": str(type_name), "subtype": str(subtype_name), "xy": xy}
     return result
+
+
+def load_from_mcap(path: str) -> tuple[str | None, dict[int, dict]]:
+    """Read MCAP and return (xodr_xml_or_none, trajectories dict).
+
+    Requires betterosi. Topics read: ground_truth_map + ground_truth.
+    """
+    try:
+        import betterosi
+    except ImportError:
+        raise ImportError("betterosi is required for MCAP loading: uv pip install betterosi")
+
+    xodr_xml: str | None = None
+    for msg in betterosi.read(path, mcap_topics=["ground_truth_map"]):
+        xodr_xml = getattr(msg, "open_drive_xml_content", None) or getattr(msg, "content", None)
+        if xodr_xml:
+            break
+
+    obj_data: dict[int, dict] = {}
+    for gt in betterosi.read(path, return_ground_truth=True, mcap_topics=["ground_truth"]):
+        for mo in gt.moving_object:
+            oid = int(mo.id.value)
+            x, y = float(mo.base.position.x), float(mo.base.position.y)
+            if oid not in obj_data:
+                raw_type = mo.type
+                type_name = raw_type.name if hasattr(raw_type, "name") else str(raw_type)
+                vc = getattr(mo, "vehicle_classification", None)
+                subtype_name = "OTHER"
+                if vc is not None:
+                    vt = getattr(vc, "type", None)
+                    if vt is not None:
+                        vt_name = vt.name if hasattr(vt, "name") else str(vt)
+                        if vt_name not in ("UNKNOWN", "OTHER", "0"):
+                            subtype_name = vt_name
+                obj_data[oid] = {"type": type_name, "subtype": subtype_name, "points": []}
+            obj_data[oid]["points"].append((x, y))
+
+    trajectories = {
+        oid: {"type": d["type"], "subtype": d["subtype"], "xy": np.array(d["points"])}
+        for oid, d in obj_data.items()
+        if len(d["points"]) >= 2
+    }
+    return xodr_xml, trajectories
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +465,8 @@ def build_scene(
     parking: list[ParkingObject],
     road_map: dict[str, Road],
     trajectories: dict[int, dict],
-) -> None:
+    type_colors: dict[tuple[str, str], QtGui.QColor],
+) -> dict[int, QtWidgets.QGraphicsPathItem]:
     no_pen = QtGui.QPen(QtCore.Qt.NoPen if hasattr(QtCore.Qt, "NoPen") else QtCore.Qt.PenStyle.NoPen)
 
     # 1. Lane polygons
@@ -411,33 +504,38 @@ def build_scene(
             scene.addPolygon(_qpoly(rect_pts), park_pen, park_brush)
 
     # 4. Trajectories
-    for obj_info in trajectories.values():
+    traj_items: dict[int, QtWidgets.QGraphicsPathItem] = {}
+    for obj_id, obj_info in trajectories.items():
         xy = obj_info["xy"]
         if len(xy) < 2:
             continue
         tname = obj_info["type"]
-        color = QtGui.QColor(220, 0, 0) if tname == "VEHICLE" else QtGui.QColor(255, 140, 0)
+        sname = obj_info.get("subtype", "OTHER")
+        color = type_colors.get((tname, sname), QtGui.QColor(220, 0, 0))
         pen = QtGui.QPen(color)
         pen.setWidthF(0.3)
         path = QtGui.QPainterPath()
         path.moveTo(float(xy[0, 0]), -float(xy[0, 1]))
         for px, py in xy[1:]:
             path.lineTo(float(px), -float(py))
-        scene.addPath(path, pen)
+        traj_items[obj_id] = scene.addPath(path, pen)
+    return traj_items
 
 
 # ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
 
-class XodrViewer(QtWidgets.QMainWindow):
+class TrajectoryExplorer(QtWidgets.QMainWindow):
     """Interactive viewer for OpenDRIVE maps and CSV trajectories."""
 
-    def __init__(self, xodr_path: str | None = None, csv_path: str | None = None):
+    def __init__(self, xodr_path: str | None = None, csv_path: str | None = None,
+                 mcap_path: str | None = None):
         super().__init__()
         self._xodr_path = xodr_path or ""
         self._csv_path = csv_path or ""
-        self.setWindowTitle("XODR Viewer")
+        self._mcap_path = mcap_path or ""
+        self.setWindowTitle("Trajectory Explorer")
         self.resize(1400, 900)
 
         central = QtWidgets.QWidget()
@@ -454,11 +552,16 @@ class XodrViewer(QtWidgets.QMainWindow):
         self.btn_csv = QtWidgets.QPushButton("Open CSV")
         self.lbl_csv = QtWidgets.QLabel(self._csv_path or "—")
         self.lbl_csv.setStyleSheet("color:#6b7280; max-width:400px;")
+        self.btn_mcap = QtWidgets.QPushButton("Open MCAP")
+        self.lbl_mcap = QtWidgets.QLabel(self._mcap_path or "—")
+        self.lbl_mcap.setStyleSheet("color:#6b7280; max-width:400px;")
         self.btn_fit = QtWidgets.QPushButton("Fit View")
         self.btn_clear_csv = QtWidgets.QPushButton("Clear CSV")
+        self.btn_clear_mcap = QtWidgets.QPushButton("Clear MCAP")
 
         for w in (self.btn_xodr, self.lbl_xodr, self.btn_csv, self.lbl_csv,
-                  self.btn_fit, self.btn_clear_csv):
+                  self.btn_mcap, self.lbl_mcap,
+                  self.btn_fit, self.btn_clear_csv, self.btn_clear_mcap):
             tb.addWidget(w)
         tb.addStretch(1)
         root.addLayout(tb)
@@ -474,15 +577,55 @@ class XodrViewer(QtWidgets.QMainWindow):
             pass
         self.view.setRenderHint(QtGui.QPainter.Antialiasing if hasattr(QtGui.QPainter, "Antialiasing")
                                 else QtGui.QPainter.RenderHint.Antialiasing)
-        root.addWidget(self.view, 1)
+
+        # Splitter: view (left) + tree panel (right)
+        splitter = QtWidgets.QSplitter(
+            QtCore.Qt.Orientation.Horizontal if hasattr(QtCore.Qt, "Orientation")
+            else QtCore.Qt.Horizontal
+        )
+        splitter.addWidget(self.view)
+
+        right = QtWidgets.QWidget()
+        right.setMinimumWidth(160)
+        rl = QtWidgets.QVBoxLayout(right)
+        rl.setContentsMargins(4, 4, 4, 4)
+        rl.setSpacing(4)
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_all = QtWidgets.QPushButton("Select All")
+        btn_none = QtWidgets.QPushButton("Deselect All")
+        btn_row.addWidget(btn_all)
+        btn_row.addWidget(btn_none)
+        rl.addLayout(btn_row)
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(
+            QtWidgets.QFrame.Shape.HLine if hasattr(QtWidgets.QFrame, "Shape")
+            else QtWidgets.QFrame.HLine
+        )
+        rl.addWidget(sep)
+        self._tree = QtWidgets.QTreeWidget()
+        self._tree.setHeaderHidden(True)
+        rl.addWidget(self._tree)
+        splitter.addWidget(right)
+        splitter.setSizes([1140, 260])
+        root.addWidget(splitter, 1)
+
+        # Per-type state
+        self._traj_items: dict[int, QtWidgets.QGraphicsPathItem] = {}
+        self._type_colors: dict[tuple[str, str], QtGui.QColor] = {}
+        self._type_subtype_objs: dict[str, dict[str, list[int]]] = {}
 
         self.btn_xodr.clicked.connect(self._open_xodr)
         self.btn_csv.clicked.connect(self._open_csv)
+        self.btn_mcap.clicked.connect(self._open_mcap)
         self.btn_fit.clicked.connect(self._fit)
         self.btn_clear_csv.clicked.connect(self._clear_csv)
+        self.btn_clear_mcap.clicked.connect(self._clear_mcap)
         self.view.wheelEvent = self._wheel_zoom  # type: ignore[assignment]
+        btn_all.clicked.connect(lambda: self._set_all(_CHECKED))
+        btn_none.clicked.connect(lambda: self._set_all(_UNCHECKED))
+        self._tree.itemChanged.connect(self._on_item_changed)
 
-        if self._xodr_path:
+        if self._mcap_path or self._xodr_path:
             self._reload()
 
     def _open_xodr(self):
@@ -499,9 +642,29 @@ class XodrViewer(QtWidgets.QMainWindow):
             self.lbl_csv.setText(path)
             self._reload()
 
+    def _open_mcap(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open MCAP", "", "MCAP (*.mcap);;All (*)")
+        if path:
+            self._mcap_path = path
+            self.lbl_mcap.setText(path)
+            self._reload()
+
     def _clear_csv(self):
         self._csv_path = ""
         self.lbl_csv.setText("—")
+        self._tree.clear()
+        self._traj_items = {}
+        self._type_subtype_objs = {}
+        self._type_colors = {}
+        self._reload()
+
+    def _clear_mcap(self):
+        self._mcap_path = ""
+        self.lbl_mcap.setText("—")
+        self._tree.clear()
+        self._traj_items = {}
+        self._type_subtype_objs = {}
+        self._type_colors = {}
         self._reload()
 
     def _fit(self):
@@ -517,24 +680,118 @@ class XodrViewer(QtWidgets.QMainWindow):
 
     def _reload(self):
         self.scene.clear()
-        if not self._xodr_path:
+        self._traj_items = {}
+        if self._mcap_path:
+            self._reload_mcap()
+        elif self._xodr_path:
+            self._reload_xodr_csv()
+
+    def _reload_mcap(self):
+        try:
+            xodr_xml, trajectories = load_from_mcap(self._mcap_path)
+        except Exception as exc:
+            self.scene.addText(f"Error loading MCAP: {exc}")
             return
+        roads, parking = [], []
+        if xodr_xml:
+            try:
+                roads, parking, _ = parse_xodr_text(xodr_xml)
+            except Exception as exc:
+                print(f"Warning: could not parse embedded XODR: {exc}")
+        self._finish_reload(roads, parking, trajectories)
+
+    def _reload_xodr_csv(self):
         try:
             roads, parking, _ = parse_xodr(self._xodr_path)
         except Exception as exc:
             self.scene.addText(f"Error loading XODR: {exc}")
             return
-        road_map = {r.id: r for r in roads}
-
         trajectories: dict[int, dict] = {}
         if self._csv_path:
             try:
                 trajectories = load_trajectories(self._csv_path)
             except Exception as exc:
                 print(f"Warning: could not load CSV: {exc}")
+        self._finish_reload(roads, parking, trajectories)
 
-        build_scene(self.scene, roads, parking, road_map, trajectories)
+    def _finish_reload(self, roads, parking, trajectories):
+        road_map = {r.id: r for r in roads}
+        self._type_subtype_objs = {}
+        for oid, info in trajectories.items():
+            tname, sname = info["type"], info.get("subtype", "OTHER")
+            self._type_subtype_objs.setdefault(tname, {}).setdefault(sname, []).append(oid)
+        pairs = sorted(
+            (tname, sname)
+            for tname, sub_dict in self._type_subtype_objs.items()
+            for sname in sub_dict
+        )
+        self._type_colors = _make_type_colors(pairs)
+        self._traj_items = build_scene(self.scene, roads, parking, road_map, trajectories, self._type_colors)
+        self._build_tree()
         self.view.fitInView(self.scene.sceneRect(), _keep_aspect_ratio())
+
+    def _build_tree(self):
+        self._tree.blockSignals(True)
+        self._tree.clear()
+        for type_name in sorted(self._type_subtype_objs):
+            sub_dict = self._type_subtype_objs[type_name]
+            total = sum(len(ids) for ids in sub_dict.values())
+            type_item = QtWidgets.QTreeWidgetItem(self._tree, [f"{type_name}  ({total})"])
+            type_item.setCheckState(0, _CHECKED)
+            for subtype_name in sorted(sub_dict):
+                obj_ids = sub_dict[subtype_name]
+                color = self._type_colors[(type_name, subtype_name)]
+                sub_item = QtWidgets.QTreeWidgetItem(type_item, [f"{subtype_name}  ({len(obj_ids)})"])
+                sub_item.setCheckState(0, _CHECKED)
+                sub_item.setForeground(0, QtGui.QBrush(color))
+                _set_color_swatch(sub_item, color)
+                for oid in obj_ids:
+                    leaf = QtWidgets.QTreeWidgetItem(sub_item, [str(oid)])
+                    leaf.setCheckState(0, _CHECKED)
+                sub_item.setExpanded(True)
+            type_item.setExpanded(True)
+        self._tree.blockSignals(False)
+
+    def _on_item_changed(self, item, col):
+        if col != 0:
+            return
+        checked = item.checkState(0) == _CHECKED
+        self._tree.blockSignals(True)
+        try:
+            parent = item.parent()
+            if parent is None:
+                # type group → cascade all subtypes and leaves
+                for i in range(item.childCount()):
+                    sub = item.child(i)
+                    sub.setCheckState(0, item.checkState(0))
+                    for j in range(sub.childCount()):
+                        leaf = sub.child(j)
+                        leaf.setCheckState(0, item.checkState(0))
+                        oid = int(leaf.text(0))
+                        if oid in self._traj_items:
+                            self._traj_items[oid].setVisible(checked)
+            elif parent.parent() is None:
+                # subtype group → cascade leaves + update type parent
+                for i in range(item.childCount()):
+                    leaf = item.child(i)
+                    leaf.setCheckState(0, item.checkState(0))
+                    oid = int(leaf.text(0))
+                    if oid in self._traj_items:
+                        self._traj_items[oid].setVisible(checked)
+                _update_parent_state(parent)
+            else:
+                # obj leaf → update visibility + update subtype + type
+                oid = int(item.text(0))
+                if oid in self._traj_items:
+                    self._traj_items[oid].setVisible(checked)
+                _update_parent_state(parent)
+                _update_parent_state(parent.parent())
+        finally:
+            self._tree.blockSignals(False)
+
+    def _set_all(self, state):
+        for i in range(self._tree.topLevelItemCount()):
+            self._tree.topLevelItem(i).setCheckState(0, state)
 
 
 # ---------------------------------------------------------------------------
@@ -545,10 +802,11 @@ def main():
     parser = argparse.ArgumentParser(description="XODR + trajectory viewer")
     parser.add_argument("--xodr", help="Path to .xodr file")
     parser.add_argument("--csv", help="Path to trajectory CSV file")
+    parser.add_argument("--mcap", help="Path to MCAP file (contains map + trajectories)")
     args = parser.parse_args()
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    win = XodrViewer(xodr_path=args.xodr, csv_path=args.csv)
+    win = TrajectoryExplorer(xodr_path=args.xodr, csv_path=args.csv, mcap_path=args.mcap)
     win.show()
     try:
         app.exec_()

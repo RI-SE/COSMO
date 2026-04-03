@@ -39,6 +39,8 @@ try:
 except ImportError:  # pragma: no cover
     betterosi = None
 
+from cosmo.converters.ontology_mapper import OntologyMapper
+
 
 # -----------------------------------------------------------------------------
 # Defaults
@@ -314,8 +316,8 @@ def build_enum_code_maps():
     vt_name_to_code, vr_name_to_code = {}, {}
     vt_default, vr_default = 0, 0
     if betterosi is not None:
-        VT = getattr(betterosi, "VehicleType", None)
-        VR = getattr(betterosi, "VehicleRole", None)
+        VT = getattr(betterosi, "MovingObjectVehicleClassificationType", None)
+        VR = getattr(betterosi, "MovingObjectVehicleClassificationRole", None)
         if VT is not None:
             for m in VT:
                 vt_name_to_code[_canonical(m.name)] = m.value
@@ -323,7 +325,7 @@ def build_enum_code_maps():
         if VR is not None:
             for m in VR:
                 vr_name_to_code[_canonical(m.name)] = m.value
-            vr_default = vr_name_to_code.get("MOVING", vr_default)
+            vr_default = vr_name_to_code.get("CIVIL", vr_default)
     return vt_name_to_code, vr_name_to_code, vt_default, vr_default
 
 
@@ -341,27 +343,20 @@ def make_vehicle_classification(
     vt_code = vt_name_to_code.get(subtype_upper, vt_default)
     vr_code = vr_name_to_code.get(role_upper, vr_default)
 
-    VT = getattr(betterosi, "VehicleType", None)
-    VR = getattr(betterosi, "VehicleRole", None)
-    if VT is None or VR is None:
-        return betterosi.MovingObjectVehicleClassification()
-
-    vt_member = None
-    vr_member = None
-    try:
-        vt_member = VT(vt_code)
-    except Exception:
-        pass
-    try:
-        vr_member = VR(vr_code)
-    except Exception:
-        pass
+    VT = getattr(betterosi, "MovingObjectVehicleClassificationType", None)
+    VR = getattr(betterosi, "MovingObjectVehicleClassificationRole", None)
 
     kwargs = {}
-    if vt_member is not None:
-        kwargs["type"] = vt_member
-    if vr_member is not None:
-        kwargs["role"] = vr_member
+    if VT is not None:
+        try:
+            kwargs["type"] = VT(vt_code)
+        except Exception:
+            pass
+    if VR is not None:
+        try:
+            kwargs["role"] = VR(vr_code)
+        except Exception:
+            pass
 
     return betterosi.MovingObjectVehicleClassification(**kwargs) if kwargs else betterosi.MovingObjectVehicleClassification()
 
@@ -468,6 +463,12 @@ def convert_openlabel_to_omega(
 
     ol = load_json(openlabel_path)
     objects_meta, frames = parse_openlabel(ol)
+
+    _ont_urls = [
+        url for url in (ol.get("openlabel", ol).get("ontologies") or {}).values()
+        if isinstance(url, str) and url.startswith("http")
+    ]
+    mapper = OntologyMapper(_ont_urls)
     if georef_data_path and odr_path and os.path.isfile(odr_path):
         _check_proj_string_match(georef_data_path, odr_path)
 
@@ -612,9 +613,8 @@ def convert_openlabel_to_omega(
 
                     meta = objects_meta.get(oid, {})
                     label_type = meta.get("type", "other")
-                    type_code, type_name_upper = classify_openlabel_type(label_type)
-
-                    subtype_upper, role_upper = _object_meta(oid)
+                    type_code, type_name_upper, subtype_upper = mapper.classify(label_type)
+                    role_upper = normalize_role(meta.get("role"))
                     vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                     vr_code = vr_name_to_code.get(role_upper, vr_default)
 
@@ -693,9 +693,8 @@ def convert_openlabel_to_omega(
 
                 meta = objects_meta.get(oid, {})
                 label_type = meta.get("type", "other")
-                type_code, type_name_upper = classify_openlabel_type(label_type)
-
-                subtype_upper, role_upper = _object_meta(oid)
+                type_code, type_name_upper, subtype_upper = mapper.classify(label_type)
+                role_upper = normalize_role(meta.get("role"))
                 vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                 vr_code = vr_name_to_code.get(role_upper, vr_default)
 
