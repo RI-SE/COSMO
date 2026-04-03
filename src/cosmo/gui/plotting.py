@@ -148,6 +148,9 @@ class PlotController:
         fig = Figure(figsize=(9, 6), tight_layout=True)
         ax = fig.add_subplot(111)
 
+        # omega_prime >=0.3.0 calls apply_projections() automatically in from_file(),
+        # using the XODR <geoReference> CRS and <header><offset> to bring moving object
+        # positions to map-local coordinates — the same frame as the road geometry.
         plotted = False
         try:
             rec.plot(ax=ax)

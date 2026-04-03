@@ -132,6 +132,44 @@ def angle_wrap(yaw: float) -> float:
 # ORBIT georef + calibration loading
 # -----------------------------------------------------------------------------
 
+def _check_proj_string_match(georef_data_path: str, odr_path: str) -> None:
+    """Raise ValueError if georef and XODR describe different coordinate systems."""
+    with open(georef_data_path, encoding="utf-8") as f:
+        georef = json.load(f)
+    georef_proj = georef.get("proj_string")
+
+    with open(odr_path, encoding="utf-8", errors="ignore") as f:
+        xodr_text = f.read()
+    m = re.search(r"<geoReference>(.*?)</geoReference>", xodr_text, re.S)
+    xodr_proj = m.group(1).strip() if m else None
+
+    if not georef_proj and not xodr_proj:
+        return  # Both old-format, nothing to compare
+    if not georef_proj:
+        raise ValueError(
+            "Georef file has no proj_string (old v1.0 format). "
+            "Re-export the georef from ORBIT to get a v1.1 file with projection info."
+        )
+    if not xodr_proj:
+        raise ValueError(
+            "XODR file has no <geoReference>. Cannot verify projection match with georef."
+        )
+
+    def _normalize(s: str) -> str:
+        # Strip origin-only params that may differ between XODR and georef for UTM
+        s = re.sub(r'\+lat_0=\S+', '', s)
+        s = re.sub(r'\+lon_0=\S+', '', s)
+        return ' '.join(s.split())
+
+    if _normalize(georef_proj) != _normalize(xodr_proj):
+        raise ValueError(
+            f"Projection mismatch between georef and XODR:\n"
+            f"  georef: {georef_proj}\n"
+            f"  XODR:   {xodr_proj}\n"
+            "Re-export both files from ORBIT using the same projection."
+        )
+
+
 def load_alignment(
     calibration_path: Optional[str],
     georef_data_path: Optional[str],
@@ -430,6 +468,9 @@ def convert_openlabel_to_omega(
 
     ol = load_json(openlabel_path)
     objects_meta, frames = parse_openlabel(ol)
+    if georef_data_path and odr_path and os.path.isfile(odr_path):
+        _check_proj_string_match(georef_data_path, odr_path)
+
     fps, H, defaults = load_alignment(calibration_path, georef_data_path, fps_arg)
     alignment_source = 'none'
     if georef_data_path:
