@@ -445,6 +445,7 @@ def convert_openlabel_to_omega(
     yaw_offset_rad: float = 0.0,
     strip_xodr_namespace: bool = False,
     log_fn: Optional[Callable[[str], None]] = None,
+    corrector=None,
 ):
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP.
@@ -608,7 +609,6 @@ def convert_openlabel_to_omega(
 
                 for oid, od in frame["objects"].items():
                     cx, cy, w_px, h_px, yaw_img = od["rbbox"]
-                    X, Y, Z = project_pixel_to_xyz(cx, cy)
                     idx = obj_name_to_idx.get(oid)
 
                     meta = objects_meta.get(oid, {})
@@ -618,7 +618,19 @@ def convert_openlabel_to_omega(
                     vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                     vr_code = vr_name_to_code.get(role_upper, vr_default)
 
-                    length, width, height = estimate_dims(label_type, w_px, h_px)
+                    if corrector is not None:
+                        _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, float(yaw_img))
+                        X, Y = post_transform_xy(
+                            _res.x, _res.y,
+                            swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y,
+                            yaw_offset_rad=yaw_offset_rad, xy_offset=xy_offset,
+                        )
+                        Z = _res.z
+                        length, width, height = _res.length, _res.width, _res.height
+                    else:
+                        X, Y, Z = project_pixel_to_xyz(cx, cy)
+                        length, width, height = estimate_dims(label_type, w_px, h_px)
+
                     vel, acc = compute_kinematics(idx, X, Y, Z)
                     yaw = angle_wrap(float(yaw_img) + float(yaw_offset_rad))
 
@@ -688,7 +700,6 @@ def convert_openlabel_to_omega(
 
             for oid, od in frame["objects"].items():
                 cx, cy, w_px, h_px, yaw_img = od["rbbox"]
-                X, Y, Z = project_pixel_to_xyz(cx, cy)
                 idx = obj_name_to_idx.get(oid)
 
                 meta = objects_meta.get(oid, {})
@@ -698,7 +709,19 @@ def convert_openlabel_to_omega(
                 vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                 vr_code = vr_name_to_code.get(role_upper, vr_default)
 
-                length, width, height = estimate_dims(label_type, w_px, h_px)
+                if corrector is not None:
+                    _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, float(yaw_img))
+                    X, Y = post_transform_xy(
+                        _res.x, _res.y,
+                        swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y,
+                        yaw_offset_rad=yaw_offset_rad, xy_offset=xy_offset,
+                    )
+                    Z = _res.z
+                    length, width, height = _res.length, _res.width, _res.height
+                else:
+                    X, Y, Z = project_pixel_to_xyz(cx, cy)
+                    length, width, height = estimate_dims(label_type, w_px, h_px)
+
                 vel, acc = compute_kinematics(idx, X, Y, Z)
                 yaw = angle_wrap(float(yaw_img) + float(yaw_offset_rad))
 

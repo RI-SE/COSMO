@@ -45,6 +45,13 @@ class ConvertConfig:
     yaw_offset_deg: float = 0.0
     strip_xodr_namespace: bool = False
 
+    # oblique correction
+    flight_record: Optional[str] = None
+    flight_record_sequence: int = 0
+    bbox_correction: str = "none"   # "none" | "analytical" | "3d"
+    camera_model: str = "mavic3pro-standard"
+    hfov_deg: Optional[float] = None
+
     # output control
     out_dir: Optional[str] = None  # If None => <project>/runs/<timestamp>_convert_<stem>/
     run_name: Optional[str] = None  # Optional override for the run folder name
@@ -201,6 +208,31 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         )
         log_fn(f"[COSMO] OpenDRIVE embedded: {'yes' if cfg.opendrive else 'no'}")
 
+    # Build oblique corrector if requested
+    corrector = None
+    if cfg.flight_record and cfg.bbox_correction != "none":
+        try:
+            from cosmo.converters.openlabel_to_omega import load_alignment
+            from cosmo.corrections import BboxCorrector, load_camera_from_flight_record
+            georef_path = str(Path(cfg.georef_data).expanduser().resolve()) if cfg.georef_data else None
+            calib_path = str(Path(cfg.calibration).expanduser().resolve()) if cfg.calibration else None
+            _, H_corr, _ = load_alignment(calib_path, georef_path, cfg.fps)
+            if H_corr is not None:
+                cam = load_camera_from_flight_record(
+                    cfg.flight_record, cfg.flight_record_sequence,
+                    cfg.camera_model, cfg.hfov_deg,
+                )
+                corrector = BboxCorrector(cam, H_corr, mode=cfg.bbox_correction)
+                if log_fn:
+                    log_fn(f"[COSMO] Oblique correction: mode={cfg.bbox_correction}, "
+                           f"height={cam.drone_height:.1f}m, el={cam.elevation_angle_deg:.1f}° from nadir")
+            else:
+                if log_fn:
+                    log_fn("[COSMO] Oblique correction skipped: no homography available")
+        except Exception as exc:
+            if log_fn:
+                log_fn(f"[COSMO] Oblique correction setup failed: {exc}")
+
     # Call converter (pass log_fn through)
     converter_fn(
         openlabel_path=str(openlabel_path),
@@ -217,7 +249,8 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         xy_offset=cfg.xy_offset,
         yaw_offset_rad=(cfg.yaw_offset_deg * 3.141592653589793 / 180.0),
         strip_xodr_namespace=cfg.strip_xodr_namespace,
-        log_fn=log_fn,  # << NEW
+        log_fn=log_fn,
+        corrector=corrector,
     )
 
     # determine produced outputs

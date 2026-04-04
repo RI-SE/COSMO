@@ -53,6 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_convert = sub.add_parser("convert", help="Convert OpenLABEL to Omega-Prime CSV and optionally MCAP")
     p_convert.set_defaults(_dispatch="convert")
 
+    p_correct = sub.add_parser("correct", help="Correct oblique-drone bboxes in an OpenLABEL file")
+    p_correct.set_defaults(_dispatch="correct")
+
     p_cal = sub.add_parser("calibrate", help="Compute calibration (pixel→ground homography) and write Calibration JSON")
     p_cal.set_defaults(_dispatch="calibrate")
 
@@ -202,6 +205,10 @@ def main(argv: list[str] | None = None) -> int:
     if dispatch == "convert":
         from cosmo.cli.convert import main as convert_main
         return int(convert_main(rest))
+
+    if dispatch == "correct":
+        from cosmo.cli.correct import main as correct_main
+        return int(correct_main(rest))
 
     if dispatch == "calibrate":
         from cosmo.cli.calibrate import main as calibrate_main

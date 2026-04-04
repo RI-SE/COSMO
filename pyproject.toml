@@ -14,6 +14,7 @@ dependencies = ["numpy", "pandas", "pillow", "matplotlib"]
 [dependency-groups]
 # Leaf groups — shared building blocks
 dev        = ["pytest", "ruff", "pre-commit"]
+correction = ["scipy>=1.10"]
 gui        = ["PyQt5>=5.15"]
 mcap       = ["betterosi>=0.8.1,<0.9", "betterproto2>=0.9,<0.10"]
 plot       = ["omega-prime>=0.3.0", "altair"]

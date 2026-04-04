@@ -106,6 +106,19 @@ Examples:
                     help="Strip XML namespace declarations from OpenDRIVE before embedding in MCAP "
                          "(workaround for omega-prime namespace-unaware XPath; disable once omega-prime adds namespace support)")
 
+    # Oblique correction
+    ob = ap.add_argument_group("oblique correction")
+    ob.add_argument("--flight-record", metavar="PATH",
+                    help="Path to FlightRecord_*.video_stats.json for oblique correction")
+    ob.add_argument("--flight-record-sequence", type=int, default=0, metavar="N",
+                    help="Sequence index within the flight record (default: 0)")
+    ob.add_argument("--bbox-correction", choices=["none", "analytical", "3d"], default="none",
+                    help="Bbox correction mode (default: none)")
+    ob.add_argument("--camera-model", default="mavic3pro-standard",
+                    help="Camera model key for HFOV/resolution lookup (default: mavic3pro-standard)")
+    ob.add_argument("--hfov-deg", type=float, default=None, metavar="FLOAT",
+                    help="Override horizontal FOV in degrees")
+
     # Run folder naming
     ap.add_argument("--run-name", required=False, help="Optional override for run folder name")
 
@@ -155,6 +168,11 @@ def main(argv=None) -> int:
         xy_offset=_parse_xy_offset(args.xy_offset),
         yaw_offset_deg=float(args.yaw_offset_deg or 0.0),
         strip_xodr_namespace=args.strip_xodr_namespace,
+        flight_record=args.flight_record,
+        flight_record_sequence=args.flight_record_sequence,
+        bbox_correction=args.bbox_correction,
+        camera_model=args.camera_model,
+        hfov_deg=args.hfov_deg,
         out_dir=args.out_dir,
         run_name=args.run_name,
     )
