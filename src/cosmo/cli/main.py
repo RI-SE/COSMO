@@ -50,13 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # We intentionally do not duplicate all flags here;
     # each subcommand owns its argument parsing.
-    p_convert = sub.add_parser("convert", help="Convert OpenLABEL to Omega-Prime CSV and optionally MCAP")
+    p_convert = sub.add_parser("convert", help="Convert OpenLABEL to Omega-Prime CSV and optionally MCAP", add_help=False)
     p_convert.set_defaults(_dispatch="convert")
 
-    p_correct = sub.add_parser("correct", help="Correct oblique-drone bboxes in an OpenLABEL file")
+    p_correct = sub.add_parser("correct", help="Correct oblique-drone bboxes in an OpenLABEL file", add_help=False)
     p_correct.set_defaults(_dispatch="correct")
 
-    p_cal = sub.add_parser("calibrate", help="Compute calibration (pixel→ground homography) and write Calibration JSON")
+    p_cal = sub.add_parser("calibrate", help="Compute calibration (pixel→ground homography) and write Calibration JSON", add_help=False)
     p_cal.set_defaults(_dispatch="calibrate")
 
     p_gui = sub.add_parser("gui", help="Launch the COSMO GUI")

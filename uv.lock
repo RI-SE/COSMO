@@ -475,6 +475,10 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+correction = [
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
 cosmo-cli = [
     { name = "altair" },
     { name = "betterosi" },
@@ -527,6 +531,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+correction = [{ name = "scipy", specifier = ">=1.10" }]
 cosmo-cli = [
     { name = "altair" },
     { name = "betterosi", specifier = ">=0.8.1,<0.9" },

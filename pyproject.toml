@@ -30,6 +30,7 @@ trajectory-explorer  = [{include-group = "gui"}, {include-group = "mcap"}, {incl
 cosmo = "cosmo.cli.main:main"
 cosmo-gui = "cosmo.cli.gui:main"
 cosmo-convert = "cosmo.cli.convert:main"
+cosmo-correct = "cosmo.cli.correct:main"
 cosmo-calibrate = "cosmo.cli.calibrate:main"
 trajectory-explorer = "cosmo.trajectory_explorer:main"
 
