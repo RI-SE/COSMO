@@ -51,6 +51,7 @@ DEFAULT_DIMENSIONS_M: Dict[str, Dict[str, float]] = {
     "truck": {"length": 12.0, "width": 2.5, "height": 3.5},
     "bus": {"length": 12.0, "width": 2.5, "height": 3.2},
     "van": {"length": 5.0, "width": 2.0, "height": 2.2},
+    "trailer": {"length": 6.0, "width": 2.0, "height": 2.5},
     "pedestrian": {"length": 0.5, "width": 0.5, "height": 1.7},
     "other": {"length": 3.0, "width": 1.5, "height": 1.5},
 }
@@ -135,6 +136,46 @@ def _h_rotation_angle(H: np.ndarray, cx: float, cy: float) -> float:
     X0, Y0 = apply_homography(H, cx, cy)
     X1, Y1 = apply_homography(H, cx + 1.0, cy)
     return math.atan2(Y1 - Y0, X1 - X0)
+
+
+def _footprint_from_homography(
+    H: np.ndarray,
+    cx: float, cy: float,
+    w_px: float, h_px: float,
+    yaw_img: float,
+    heading_rad: float,
+) -> Tuple[float, float]:
+    """Return (length_m, width_m) by projecting rbbox corners through H.
+
+    Identical to BboxCorrector._correct_analytical steps 1–3, without the
+    height-induced projection correction (no camera pose needed).
+    """
+    cos_a, sin_a = math.cos(yaw_img), math.sin(yaw_img)
+    hw, hh = w_px / 2, h_px / 2
+    corners_px = [
+        (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
+        for dx, dy in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh))
+    ]
+    corners_world = [apply_homography(H, u, v) for u, v in corners_px]
+    cos_h, sin_h = math.cos(-heading_rad), math.sin(-heading_rad)
+    veh_xs = [x * cos_h - y * sin_h for x, y in corners_world]
+    veh_ys = [x * sin_h + y * cos_h for x, y in corners_world]
+    return max(veh_xs) - min(veh_xs), max(veh_ys) - min(veh_ys)
+
+
+def _resolve_height(
+    label_type: str,
+    obj_uid: str,
+    towed_by: Dict[str, str],
+    defaults: Dict[str, Dict[str, float]],
+) -> float:
+    """Return height for an object, using towing vehicle type for trailers."""
+    key = label_type.lower()
+    if key == "trailer":
+        tower_type = towed_by.get(obj_uid)
+        if tower_type:
+            key = tower_type
+    return float(defaults.get(key, defaults.get("other", {})).get("height", 1.5))
 
 
 # -----------------------------------------------------------------------------
@@ -472,6 +513,19 @@ def convert_openlabel_to_omega(
     ol = load_json(openlabel_path)
     objects_meta, frames = parse_openlabel(ol)
 
+    # Build trailer_uid -> towing_vehicle_type from "towed-by" relations
+    towed_by: Dict[str, str] = {}
+    for rel in (ol.get("openlabel", ol).get("relations") or {}).values():
+        if rel.get("type") == "towed-by":
+            subjects = rel.get("rdf_subjects", [])
+            objects_ = rel.get("rdf_objects", [])
+            if subjects and objects_:
+                trailer_uid = str(subjects[0].get("uid", ""))
+                tower_uid = str(objects_[0].get("uid", ""))
+                tower_type = objects_meta.get(tower_uid, {}).get("type", "")
+                if trailer_uid and tower_type:
+                    towed_by[trailer_uid] = tower_type.lower()
+
     _ont_urls = [
         url for url in (ol.get("openlabel", ol).get("ontologies") or {}).values()
         if isinstance(url, str) and url.startswith("http")
@@ -495,8 +549,14 @@ def convert_openlabel_to_omega(
 
     vt_name_to_code, vr_name_to_code, vt_default, vr_default = build_enum_code_maps()
 
-    # Assign stable indices
-    obj_name_to_idx: Dict[str, int] = {oid: i + 1 for i, oid in enumerate(sorted(objects_meta.keys()))}
+    # Assign indices: use numeric UID directly if possible, else fall back to sequential
+    obj_name_to_idx: Dict[str, int] = {}
+    for i, oid in enumerate(sorted(objects_meta.keys())):
+        try:
+            obj_name_to_idx[oid] = int(oid)
+        except ValueError:
+            obj_name_to_idx[oid] = i + 1
+            _log(f"[COSMO] Warning: object UID {oid!r} is not numeric; assigned sequential idx {i + 1}")
 
     csv_cols = [
         "total_nanos", "idx", "x", "y", "z",
@@ -539,11 +599,11 @@ def convert_openlabel_to_omega(
             return X, Y, 0.0
         return cx * 0.01, cy * 0.01, 0.0
 
-    def estimate_dims(label_type: str, w_px: float, h_px: float) -> Tuple[float, float, float]:
+    def estimate_dims(label_type: str, w_px: float, h_px: float, obj_uid: str = "") -> Tuple[float, float, float]:
         dims = defaults.get(label_type.lower(), defaults.get("other", {}))
         length = float(dims.get("length", w_px * 0.01))
         width = float(dims.get("width", h_px * 0.01))
-        height = float(dims.get("height", 1.5))
+        height = _resolve_height(label_type, obj_uid, towed_by, defaults)
         return length, width, height
 
     def compute_kinematics(idx: int, X: float, Y: float, Z: float) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
@@ -627,8 +687,9 @@ def convert_openlabel_to_omega(
                     vr_code = vr_name_to_code.get(role_upper, vr_default)
 
                     heading_world = angle_wrap(-float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0))
+                    h_veh = _resolve_height(label_type, oid, towed_by, defaults)
                     if corrector is not None:
-                        _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world)
+                        _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)
                         X, Y = post_transform_xy(
                             _res.x, _res.y,
                             swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y,
@@ -638,7 +699,13 @@ def convert_openlabel_to_omega(
                         length, width, height = _res.length, _res.width, _res.height
                     else:
                         X, Y, Z = project_pixel_to_xyz(cx, cy)
-                        length, width, height = estimate_dims(label_type, w_px, h_px)
+                        if H is not None:
+                            length, width = _footprint_from_homography(
+                                H, cx, cy, w_px, h_px, yaw_img, heading_world
+                            )
+                            height = h_veh
+                        else:
+                            length, width, height = estimate_dims(label_type, w_px, h_px, oid)
 
                     vel, acc = compute_kinematics(idx, X, Y, Z)
                     yaw = angle_wrap(heading_world + float(yaw_offset_rad))
@@ -719,8 +786,9 @@ def convert_openlabel_to_omega(
                 vr_code = vr_name_to_code.get(role_upper, vr_default)
 
                 heading_world = angle_wrap(-float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0))
+                h_veh = _resolve_height(label_type, oid, towed_by, defaults)
                 if corrector is not None:
-                    _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world)
+                    _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)
                     X, Y = post_transform_xy(
                         _res.x, _res.y,
                         swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y,
@@ -730,7 +798,13 @@ def convert_openlabel_to_omega(
                     length, width, height = _res.length, _res.width, _res.height
                 else:
                     X, Y, Z = project_pixel_to_xyz(cx, cy)
-                    length, width, height = estimate_dims(label_type, w_px, h_px)
+                    if H is not None:
+                        length, width = _footprint_from_homography(
+                            H, cx, cy, w_px, h_px, yaw_img, heading_world
+                        )
+                        height = h_veh
+                    else:
+                        length, width, height = estimate_dims(label_type, w_px, h_px, oid)
 
                 vel, acc = compute_kinematics(idx, X, Y, Z)
                 yaw = angle_wrap(heading_world + float(yaw_offset_rad))

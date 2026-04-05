@@ -158,10 +158,11 @@ class BboxCorrector:
         yaw_img: float,
         label_type: str,
         heading_rad: float,
+        h_veh_override: float | None = None,
     ) -> CorrectionResult:
-        analytical = self._correct_analytical(cx, cy, w_px, h_px, yaw_img, label_type, heading_rad)
+        analytical = self._correct_analytical(cx, cy, w_px, h_px, yaw_img, label_type, heading_rad, h_veh_override)
         if self.mode == "3d":
-            return self._correct_3d(cx, cy, w_px, h_px, yaw_img, label_type, heading_rad, analytical)
+            return self._correct_3d(cx, cy, w_px, h_px, yaw_img, label_type, heading_rad, analytical, h_veh_override)
         return analytical
 
     def _correct_analytical(
@@ -171,6 +172,7 @@ class BboxCorrector:
         yaw_img: float,
         label_type: str,
         heading_rad: float,
+        h_veh_override: float | None = None,
     ) -> CorrectionResult:
         H = self.H
         # 1. Map rbbox corners to ground
@@ -204,7 +206,7 @@ class BboxCorrector:
         alpha = np.arctan2(cam_to_veh_vy, cam_to_veh_vx)
 
         # 6. Height-induced projection inflation
-        h_veh = DEFAULT_VEHICLE_HEIGHTS.get(label_type.lower(), DEFAULT_VEHICLE_HEIGHTS["other"])
+        h_veh = h_veh_override if h_veh_override is not None else DEFAULT_VEHICLE_HEIGHTS.get(label_type.lower(), DEFAULT_VEHICLE_HEIGHTS["other"])
         correction = h_veh * np.tan(theta)
         L_corr = max(L_obs - correction * abs(np.cos(alpha)), _MIN_LENGTH)
         W_corr = max(W_obs - correction * abs(np.sin(alpha)), _MIN_WIDTH)
@@ -228,10 +230,11 @@ class BboxCorrector:
         label_type: str,
         heading_rad: float,
         initial: CorrectionResult,
+        h_veh_override: float | None = None,
     ) -> CorrectionResult:
         from scipy.optimize import minimize  # type: ignore
 
-        h_veh = DEFAULT_VEHICLE_HEIGHTS.get(label_type.lower(), DEFAULT_VEHICLE_HEIGHTS["other"])
+        h_veh = h_veh_override if h_veh_override is not None else DEFAULT_VEHICLE_HEIGHTS.get(label_type.lower(), DEFAULT_VEHICLE_HEIGHTS["other"])
         x0, y0 = initial.x, initial.y
         L0, W0 = initial.length, initial.width
         obs = (cx, cy, w_px, h_px, yaw_img)
