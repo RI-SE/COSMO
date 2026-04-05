@@ -169,18 +169,19 @@ def main(argv=None) -> int:
 
     H_inv = np.linalg.inv(H)
 
+    proj_string = _read_proj_string(args.georef_data)
+
     # Build camera + corrector
     from cosmo.corrections import BboxCorrector, load_camera_from_flight_record
     cam = load_camera_from_flight_record(
         args.flight_record, args.flight_record_sequence,
         args.camera_model, args.hfov_deg,
     )
-    corrector = BboxCorrector(cam, H, mode=args.correction)
+    corrector = BboxCorrector(cam, H, mode=args.correction, proj_string=proj_string)
 
     # For geo output: add coordinate_systems to root
     root = ol.get("openlabel", ol)
     if needs_geo:
-        proj_string = _read_proj_string(args.georef_data)
         _ensure_coordinate_system(root, proj_string)
         if not proj_string:
             print("Warning: no proj_string found in georef; coordinate_system written without projection info.")

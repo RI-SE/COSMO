@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -59,18 +60,36 @@ def _box3d_corners(cx: float, cy: float, L: float, W: float, H_veh: float, headi
     return np.array(corners, dtype=np.float64)
 
 
-def _project_box(
-    cx3d: float, cy3d: float, L: float, W: float, h_veh: float,
-    heading_rad: float, K: np.ndarray, R: np.ndarray, cam_pos: np.ndarray,
-) -> np.ndarray | None:
-    """Project 3D box corners to image; return (N, 2) pixel points or None if degenerate."""
-    corners_w = _box3d_corners(cx3d, cy3d, L, W, h_veh, heading_rad)
-    pts_cam = (R @ (corners_w.T - cam_pos[:, None])).T
-    visible = pts_cam[:, 2] > 0.1
-    if visible.sum() < 3:
+def _cam_pos_from_gps(lat: float, lon: float, drone_height: float, proj_string: str) -> np.ndarray | None:
+    """Camera world position from drone GPS + proj_string UTM zone."""
+    m = re.search(r'\+zone=(\d+)', proj_string)
+    if not m:
         return None
-    pts_h = (K @ pts_cam[visible].T).T
-    return pts_h[:, :2] / pts_h[:, 2:3]
+    from cosmo.gui.marker_converter import latlon_to_utm
+    zone = int(m.group(1))
+    e, n = latlon_to_utm(lat, lon, zone)
+    return np.array([e, n, drone_height])
+
+
+def _project_box_via_h(
+    cx3d: float, cy3d: float, L: float, W: float, h_veh: float,
+    heading_rad: float, H_inv: np.ndarray, cam_pos: np.ndarray,
+) -> np.ndarray | None:
+    """Project 3D box to image via ground-shadow + H."""
+    corners = _box3d_corners(cx3d, cy3d, L, W, h_veh, heading_rad)
+    cz = cam_pos[2]
+    pts = []
+    for wx, wy, wz in corners:
+        if wz >= cz:
+            return None
+        scale = cz / (cz - wz)
+        xg = cam_pos[0] + (wx - cam_pos[0]) * scale
+        yg = cam_pos[1] + (wy - cam_pos[1]) * scale
+        q = H_inv @ np.array([xg, yg, 1.0])
+        if abs(q[2]) < 1e-12:
+            return None
+        pts.append([q[0] / q[2], q[1] / q[2]])
+    return np.array(pts)
 
 
 def _projected_bbox(pts_img: np.ndarray, yaw_img: float) -> tuple[float, float, float, float]:
@@ -84,17 +103,13 @@ def _projected_bbox(pts_img: np.ndarray, yaw_img: float) -> tuple[float, float, 
 def _fit_loss(
     params: np.ndarray,
     x0: float, y0: float,
-    camera: DroneCamera, H: np.ndarray,
+    H_inv: np.ndarray, cam_pos: np.ndarray,
     heading_rad: float, h_veh: float,
     obs: tuple[float, float, float, float, float],
 ) -> float:
     dX, dY, L, W = params
     obs_cx, obs_cy, obs_w, obs_h, obs_yaw = obs
-    K = camera.K
-    R = camera.rotation_matrix()
-    nadir = np.array(_apply_homography(H, camera.image_width / 2, camera.image_height / 2))
-    cam_pos = camera.camera_world_pos(nadir)
-    pts = _project_box(x0 + dX, y0 + dY, L, W, h_veh, heading_rad, K, R, cam_pos)
+    pts = _project_box_via_h(x0 + dX, y0 + dY, L, W, h_veh, heading_rad, H_inv, cam_pos)
     if pts is None:
         return 1e6
     cx_p, cy_p, w_p, h_p = _projected_bbox(pts, obs_yaw)
@@ -104,7 +119,8 @@ def _fit_loss(
 class BboxCorrector:
     """Correct oblique-drone bboxes for height-induced position bias and dimension inflation."""
 
-    def __init__(self, camera: DroneCamera, H: np.ndarray, mode: str = "analytical"):
+    def __init__(self, camera: DroneCamera, H: np.ndarray, mode: str = "analytical",
+                 proj_string: str | None = None):
         self.camera = camera
         self.H = H
         if mode == "3d":
@@ -116,9 +132,24 @@ class BboxCorrector:
                 self.mode = "analytical"
         else:
             self.mode = "analytical"
-        # Cache camera nadir and position (constant across frames)
+        self._H_inv = np.linalg.inv(H)
         self._nadir_xy = np.array(_apply_homography(H, camera.image_width / 2, camera.image_height / 2))
-        self._cam_pos = camera.camera_world_pos(self._nadir_xy)
+
+        # Camera position: prefer GPS, fall back to H-derived
+        gps_pos = None
+        if camera.drone_lat is not None and proj_string:
+            gps_pos = _cam_pos_from_gps(camera.drone_lat, camera.drone_lon,
+                                         camera.drone_height, proj_string)
+
+        h_pos = camera.camera_world_pos(self._nadir_xy)
+
+        if gps_pos is not None:
+            dist = np.linalg.norm(gps_pos[:2] - h_pos[:2])
+            log.info("cam_pos GPS=(%.1f,%.1f) vs H-derived=(%.1f,%.1f), diff=%.1fm",
+                     gps_pos[0], gps_pos[1], h_pos[0], h_pos[1], dist)
+            self._cam_pos = gps_pos
+        else:
+            self._cam_pos = h_pos
 
     def correct(
         self,
@@ -211,7 +242,7 @@ class BboxCorrector:
         result = minimize(
             _fit_loss,
             x0=np.array([0.0, 0.0, L0, W0]),
-            args=(x0, y0, self.camera, self.H, heading_rad, h_veh, obs),
+            args=(x0, y0, self._H_inv, self._cam_pos, heading_rad, h_veh, obs),
             method="L-BFGS-B",
             bounds=bounds,
             options={"maxiter": 100, "ftol": 1e-6},

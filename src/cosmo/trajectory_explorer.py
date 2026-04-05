@@ -585,12 +585,15 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
     """Interactive viewer for OpenDRIVE maps and CSV trajectories."""
 
     def __init__(self, xodr_path: str | None = None, csv_path: str | None = None,
-                 mcap_path: str | None = None):
+                 mcap_path: str | None = None, smooth_window: int = 5,
+                 smooth_sigma: float | None = None):
         super().__init__()
         self._xodr_path = xodr_path or ""
         self._csv_path_a = csv_path or ""
         self._csv_path_b = ""
         self._mcap_path = mcap_path or ""
+        self._smooth_window = smooth_window
+        self._smooth_sigma = smooth_sigma if smooth_sigma is not None else smooth_window / 2
         self.setWindowTitle("Trajectory Explorer")
         self.resize(1400, 900)
 
@@ -611,6 +614,8 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
         # Tree data
         self._type_subtype_objs: dict[str, dict[str, list[int]]] = {}
+        self._frameless_oids: set[int] = set()
+        self._speed_kmh: bool = False
 
         self._play_timer = QtCore.QTimer(self)
         self._play_timer.setInterval(1000 // self._fps)
@@ -695,9 +700,9 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         splitter_left.addWidget(self.view)
 
         self._data_table = QtWidgets.QTableWidget()
-        self._data_table.setColumnCount(10)
+        self._data_table.setColumnCount(11)
         self._data_table.setHorizontalHeaderLabels(
-            ["Src", "ID", "X", "Y", "Speed", "Yaw°", "L×W×H", "Type", "Subtype", "Role"]
+            ["Src", "ID", "X", "Y", "Speed m/s", "Speed-s m/s", "Yaw°", "L×W×H", "Type", "Subtype", "Role"]
         )
         self._data_table.setMinimumHeight(120)
         self._data_table.setEditTriggers(
@@ -756,6 +761,10 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         for b in (self._btn_step_back, self._btn_play, self._btn_step_fwd):
             b.setFixedWidth(44)
             btn_row.addWidget(b)
+        self._btn_speed_unit = QtWidgets.QPushButton("m/s")
+        self._btn_speed_unit.setFixedWidth(44)
+        self._btn_speed_unit.setCheckable(True)
+        btn_row.addWidget(self._btn_speed_unit)
         btn_row.addStretch(1)
         vl.addLayout(btn_row)
 
@@ -789,6 +798,8 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._btn_step_back.clicked.connect(lambda: self._on_step(-1))
         self._btn_step_fwd.clicked.connect(lambda: self._on_step(1))
         self._slider.sliderMoved.connect(self._on_slider_moved)
+        self._btn_speed_unit.clicked.connect(self._toggle_speed_unit)
+        self._tree.itemDoubleClicked.connect(self._on_tree_item_double_clicked)
 
     # ------------------------------------------------------------------
     # File open / clear
@@ -908,6 +919,11 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         all_ids = set(self._trajs_a) | set(self._trajs_b)
         self._obj_colors = _build_obj_colors(all_ids)
         self._build_type_subtype_objs()
+        self._frameless_oids = {
+            oid for oid in all_ids
+            if not self._trajs_a.get(oid, {}).get("nanos_set")
+            and not self._trajs_b.get(oid, {}).get("nanos_set")
+        }
 
         # Build sorted union of all timestamps
         nanos_set: set[int] = set()
@@ -915,7 +931,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             nanos_set.update(obj["nanos_set"])
         for obj in self._trajs_b.values():
             nanos_set.update(obj["nanos_set"])
-        self._all_nanos = sorted(nanos_set)
+        self._all_nanos = _build_full_timeline(nanos_set)
 
         path_alpha = 80 if self._all_nanos else 255
         road_map = {r.id: r for r in roads}
@@ -928,6 +944,11 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
                 self.scene, self._trajs_b, self._obj_colors,
                 path_alpha=path_alpha, dashed=True,
             )
+
+        if self._trajs_a:
+            self._compute_smooth_speed(self._trajs_a)
+        if self._trajs_b:
+            self._compute_smooth_speed(self._trajs_b)
 
         self._build_playback_items()
         self._build_tree()
@@ -968,6 +989,31 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._type_subtype_objs = {}
         for oid, (tname, sname) in combined.items():
             self._type_subtype_objs.setdefault(tname, {}).setdefault(sname, []).append(oid)
+
+    def _compute_smooth_speed(self, trajs: dict[int, dict]) -> None:
+        """Add 'speed_smooth' and 'nanos_to_idx' to each trajectory dict."""
+        half = self._smooth_window
+        offsets = np.arange(-half, half + 1)
+        kernel = np.exp(-offsets**2 / (2 * self._smooth_sigma**2))
+
+        for obj in trajs.values():
+            nanos = obj["nanos"]
+            df = obj["df"]
+            raw = np.array([
+                math.sqrt(
+                    _get_col(df.loc[n] if not isinstance(df.loc[n], pd.DataFrame)
+                             else df.loc[n].iloc[0], "vel_x", float("nan"))**2 +
+                    _get_col(df.loc[n] if not isinstance(df.loc[n], pd.DataFrame)
+                             else df.loc[n].iloc[0], "vel_y", float("nan"))**2
+                )
+                for n in nanos
+            ])
+            valid = np.isfinite(raw)
+            filled = np.where(valid, raw, 0.0)
+            weight_sum = np.convolve(valid.astype(float), kernel, mode="same")
+            value_sum = np.convolve(filled, kernel, mode="same")
+            obj["speed_smooth"] = np.where(weight_sum > 0, value_sum / weight_sum, float("nan"))
+            obj["nanos_to_idx"] = {int(n): i for i, n in enumerate(nanos)}
 
     # ------------------------------------------------------------------
     # Playback item creation
@@ -1014,7 +1060,9 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
         total = len(self._all_nanos)
         t_s = (nanos - self._all_nanos[0]) / 1e9 if total > 1 else 0.0
-        self._lbl_frame.setText(f"frame {idx + 1}/{total}  t={t_s:.1f}s")
+        minutes = int(t_s // 60)
+        seconds = t_s % 60
+        self._lbl_frame.setText(f"frame {idx + 1}/{total}  {minutes}:{seconds:05.2f}")
         self._slider.setValue(idx)
 
     def _update_rect_items(
@@ -1045,9 +1093,10 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
     def _update_data_table(self, nanos: int) -> None:
         rows = []
-        for src_label, trajs in [("A", self._trajs_a), ("B", self._trajs_b)]:
-            for oid in sorted(trajs):
-                if oid not in self._checked_oids:
+        all_oids = sorted(set(self._trajs_a) | set(self._trajs_b))
+        for oid in all_oids:
+            for src_label, trajs in [("A", self._trajs_a), ("B", self._trajs_b)]:
+                if oid not in trajs or oid not in self._checked_oids:
                     continue
                 obj = trajs[oid]
                 if nanos not in obj["nanos_set"]:
@@ -1064,6 +1113,12 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             vx = _get_col(row, "vel_x", 0.0)
             vy = _get_col(row, "vel_y", 0.0)
             speed = math.sqrt(vx**2 + vy**2)
+            idx = obj.get("nanos_to_idx", {}).get(nanos)
+            speed_s = obj["speed_smooth"][idx] if idx is not None and "speed_smooth" in obj else float("nan")
+            if self._speed_kmh:
+                speed *= 3.6
+                speed_s *= 3.6
+            speed_s_str = f"{speed_s:.2f}" if math.isfinite(speed_s) else "-"
             yaw_deg = math.degrees(_get_col(row, "yaw", 0.0))
             dims = _DEFAULT_DIMENSIONS_M.get(obj["type"], _DEFAULT_DIM_FALLBACK)
             L = _get_col(row, "length", dims[0])
@@ -1073,7 +1128,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             sname = _get_str_col(row, "subtype_name", obj.get("subtype", ""))
             rname = _get_str_col(row, "role_name", "")
 
-            cells = [src, str(oid), f"{x:.1f}", f"{y:.1f}", f"{speed:.2f}",
+            cells = [src, str(oid), f"{x:.1f}", f"{y:.1f}", f"{speed:.2f}", speed_s_str,
                      f"{yaw_deg:.1f}", f"{L:.1f}×{W:.1f}×{H:.1f}", tname, sname, rname]
             for c_idx, val in enumerate(cells):
                 self._data_table.setItem(r_idx, c_idx, QtWidgets.QTableWidgetItem(val))
@@ -1131,10 +1186,18 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
                 sub_item = QtWidgets.QTreeWidgetItem(type_item, [f"{subtype_name}  ({len(obj_ids)})"])
                 sub_item.setCheckState(0, _CHECKED)
                 for oid in obj_ids:
-                    leaf = QtWidgets.QTreeWidgetItem(sub_item, [str(oid)])
+                    label = str(oid)
+                    if oid in self._frameless_oids:
+                        label += "  ∅"
+                    leaf = QtWidgets.QTreeWidgetItem(sub_item, [label])
                     leaf.setCheckState(0, _CHECKED)
                     color = self._obj_colors.get(oid, QtGui.QColor(200, 200, 200))
-                    leaf.setForeground(0, QtGui.QBrush(color))
+                    if oid in self._frameless_oids:
+                        leaf.setForeground(0, QtGui.QBrush(QtGui.QColor(150, 150, 150)))
+                        leaf.setToolTip(0, "No frames in timeline")
+                    else:
+                        leaf.setForeground(0, QtGui.QBrush(color))
+                        leaf.setToolTip(0, "Double-click to jump to first frame")
                     _set_color_swatch(leaf, color)
                     self._checked_oids.add(oid)
                 sub_item.setExpanded(True)
@@ -1156,17 +1219,17 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
                     for j in range(sub.childCount()):
                         leaf = sub.child(j)
                         leaf.setCheckState(0, item.checkState(0))
-                        self._set_oid_visible(int(leaf.text(0)), checked)
+                        self._set_oid_visible(int(leaf.text(0).split()[0]), checked)
             elif parent.parent() is None:
                 # Subtype group → cascade leaves
                 for i in range(item.childCount()):
                     leaf = item.child(i)
                     leaf.setCheckState(0, item.checkState(0))
-                    self._set_oid_visible(int(leaf.text(0)), checked)
+                    self._set_oid_visible(int(leaf.text(0).split()[0]), checked)
                 _update_parent_state(parent)
             else:
                 # Leaf
-                oid = int(item.text(0))
+                oid = int(item.text(0).split()[0])
                 self._set_oid_visible(oid, checked)
                 _update_parent_state(parent)
                 _update_parent_state(parent.parent())
@@ -1188,6 +1251,38 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
                 items[oid].setVisible(visible)
         # Rect items visibility handled by next _update_frame call
 
+    def _toggle_speed_unit(self) -> None:
+        self._speed_kmh = self._btn_speed_unit.isChecked()
+        self._btn_speed_unit.setText("km/h" if self._speed_kmh else "m/s")
+        header = self._data_table.horizontalHeaderItem(4)
+        if header:
+            header.setText("Speed km/h" if self._speed_kmh else "Speed m/s")
+        header5 = self._data_table.horizontalHeaderItem(5)
+        if header5:
+            header5.setText("Speed-s km/h" if self._speed_kmh else "Speed-s m/s")
+        if self._all_nanos:
+            self._update_frame(self._frame_idx)
+
+    def _on_tree_item_double_clicked(self, item, col) -> None:
+        """Jump to the first frame where the double-clicked object exists."""
+        if item.parent() is None or item.parent().parent() is None:
+            return  # type or subtype group, not a leaf
+        try:
+            oid = int(item.text(0).split()[0])
+        except (ValueError, IndexError):
+            return
+        first_nano = None
+        for trajs in (self._trajs_a, self._trajs_b):
+            if oid in trajs and trajs[oid].get("nanos_set"):
+                candidate = min(trajs[oid]["nanos_set"])
+                if first_nano is None or candidate < first_nano:
+                    first_nano = candidate
+        if first_nano is not None and first_nano in self._all_nanos:
+            idx = self._all_nanos.index(first_nano)
+            self._play_timer.stop()
+            self._btn_play.setText("▶")
+            self._update_frame(idx)
+
     def _set_all(self, state):
         for i in range(self._tree.topLevelItemCount()):
             self._tree.topLevelItem(i).setCheckState(0, state)
@@ -1196,6 +1291,23 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_full_timeline(nanos_set: set[int]) -> list[int]:
+    """Reconstruct a uniform frame grid from sparse CSV timestamps.
+
+    CSV timestamps are round(k/fps * 1e9); infer fps from min gap and
+    regenerate the complete grid so empty frames are included.
+    """
+    if len(nanos_set) < 2:
+        return sorted(nanos_set)
+    nanos_arr = np.array(sorted(nanos_set), dtype=np.int64)
+    diffs = np.diff(nanos_arr)
+    dt_nanos = int(np.min(diffs[diffs > 0]))
+    fps = round(1e9 / dt_nanos)
+    start_frame = round(int(nanos_arr[0]) * fps / 1e9)
+    end_frame = round(int(nanos_arr[-1]) * fps / 1e9)
+    return [int(round(k / fps * 1e9)) for k in range(start_frame, end_frame + 1)]
 
 def _build_obj_colors(all_ids: set[int]) -> dict[int, QtGui.QColor]:
     """Assign a palette color per unique object id."""
@@ -1228,10 +1340,15 @@ def main():
     parser.add_argument("--xodr", help="Path to .xodr file")
     parser.add_argument("--csv", help="Path to trajectory CSV file (CSV A)")
     parser.add_argument("--mcap", help="Path to MCAP file (contains map + trajectories)")
+    parser.add_argument("--smooth-window", type=int, default=5,
+        help="Half-width of Gaussian smoothing window in frames (default: 5)")
+    parser.add_argument("--smooth-sigma", type=float, default=None,
+        help="Gaussian sigma in frames (default: smooth_window/2)")
     args = parser.parse_args()
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    win = TrajectoryExplorer(xodr_path=args.xodr, csv_path=args.csv, mcap_path=args.mcap)
+    win = TrajectoryExplorer(xodr_path=args.xodr, csv_path=args.csv, mcap_path=args.mcap,
+                             smooth_window=args.smooth_window, smooth_sigma=args.smooth_sigma)
     win.show()
     try:
         app.exec_()

@@ -23,6 +23,8 @@ class DroneCamera:
     image_width: int
     image_height: int
     hfov_deg: float
+    drone_lat: float | None = None
+    drone_lon: float | None = None
 
     @property
     def K(self) -> np.ndarray:
@@ -95,6 +97,13 @@ def load_camera_from_flight_record(
     resolved_width = image_width if image_width is not None else cam_defaults.get("image_width", 3840)
     resolved_height = image_height if image_height is not None else cam_defaults.get("image_height", 2160)
 
+    try:
+        drone_lat = float(stats["osd"]["latitude"]["mean"])
+        drone_lon = float(stats["osd"]["longitude"]["mean"])
+    except (KeyError, TypeError):
+        drone_lat = None
+        drone_lon = None
+
     cam = DroneCamera(
         drone_height=drone_height,
         gimbal_pitch_deg=gimbal_pitch,
@@ -102,6 +111,8 @@ def load_camera_from_flight_record(
         image_width=resolved_width,
         image_height=resolved_height,
         hfov_deg=resolved_hfov,
+        drone_lat=drone_lat,
+        drone_lon=drone_lon,
     )
     log.info(
         "DroneCamera: height=%.1fm, el=%.1f° from nadir, az=%.1f°, hfov=%.1f°",

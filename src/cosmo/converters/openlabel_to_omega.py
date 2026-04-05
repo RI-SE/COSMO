@@ -130,6 +130,13 @@ def angle_wrap(yaw: float) -> float:
     return (yaw + math.pi) % (2 * math.pi) - math.pi
 
 
+def _h_rotation_angle(H: np.ndarray, cx: float, cy: float) -> float:
+    """Angle (rad) that image +x direction maps to in world space via H."""
+    X0, Y0 = apply_homography(H, cx, cy)
+    X1, Y1 = apply_homography(H, cx + 1.0, cy)
+    return math.atan2(Y1 - Y0, X1 - X0)
+
+
 # -----------------------------------------------------------------------------
 # ORBIT georef + calibration loading
 # -----------------------------------------------------------------------------
@@ -557,6 +564,7 @@ def convert_openlabel_to_omega(
         last_positions[idx] = (X, Y, Z)
         last_velocities[idx] = vel
 
+
     # ----------------------------
     # MCAP writing (patched)
     # ----------------------------
@@ -618,8 +626,9 @@ def convert_openlabel_to_omega(
                     vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                     vr_code = vr_name_to_code.get(role_upper, vr_default)
 
+                    heading_world = angle_wrap(-float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0))
                     if corrector is not None:
-                        _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, float(yaw_img))
+                        _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world)
                         X, Y = post_transform_xy(
                             _res.x, _res.y,
                             swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y,
@@ -632,7 +641,7 @@ def convert_openlabel_to_omega(
                         length, width, height = estimate_dims(label_type, w_px, h_px)
 
                     vel, acc = compute_kinematics(idx, X, Y, Z)
-                    yaw = angle_wrap(float(yaw_img) + float(yaw_offset_rad))
+                    yaw = angle_wrap(heading_world + float(yaw_offset_rad))
 
                     csv_rows.append([
                         total_nanos, idx, X, Y, Z,
@@ -709,8 +718,9 @@ def convert_openlabel_to_omega(
                 vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                 vr_code = vr_name_to_code.get(role_upper, vr_default)
 
+                heading_world = angle_wrap(-float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0))
                 if corrector is not None:
-                    _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, float(yaw_img))
+                    _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world)
                     X, Y = post_transform_xy(
                         _res.x, _res.y,
                         swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y,
@@ -723,7 +733,7 @@ def convert_openlabel_to_omega(
                     length, width, height = estimate_dims(label_type, w_px, h_px)
 
                 vel, acc = compute_kinematics(idx, X, Y, Z)
-                yaw = angle_wrap(float(yaw_img) + float(yaw_offset_rad))
+                yaw = angle_wrap(heading_world + float(yaw_offset_rad))
 
                 csv_rows.append([
                     total_nanos, idx, X, Y, Z,
