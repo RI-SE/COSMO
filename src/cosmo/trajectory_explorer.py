@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -51,6 +53,12 @@ def _dash_line():
     if hasattr(QtCore.Qt, "PenStyle"):
         return QtCore.Qt.PenStyle.DashLine
     return QtCore.Qt.DashLine
+
+
+def _dash_dot_line():
+    if hasattr(QtCore.Qt, "PenStyle"):
+        return QtCore.Qt.PenStyle.DashDotLine
+    return QtCore.Qt.DashDotLine
 
 
 # Qt CheckState constants (compat)
@@ -321,8 +329,6 @@ def build_lane_polygons(road: Road) -> list[tuple[int, list[tuple[float, float]]
     if not samples:
         return []
 
-    sample_arr = np.array([(s, x, y, h) for s, x, y, h in samples])
-
     polygons: list[tuple[int, list[tuple[float, float]]]] = []
 
     for ls_idx, ls in enumerate(road.lane_sections):
@@ -339,10 +345,10 @@ def build_lane_polygons(road: Road) -> list[tuple[int, list[tuple[float, float]]
             is_right = lane.id < 0
             perp_sign = -1 if is_right else 1
 
-            same_side = [l for l in ls.lanes if (l.id < 0) == is_right and l.id != 0]
-            same_side.sort(key=lambda l: abs(l.id))
+            same_side = [ln for ln in ls.lanes if (ln.id < 0) == is_right and ln.id != 0]
+            same_side.sort(key=lambda ln: abs(ln.id))
             this_rank = abs(lane.id)
-            inner_lanes = [l for l in same_side if abs(l.id) < this_rank]
+            inner_lanes = [ln for ln in same_side if abs(ln.id) < this_rank]
 
             inner_pts: list[tuple[float, float]] = []
             outer_pts: list[tuple[float, float]] = []
@@ -350,7 +356,7 @@ def build_lane_polygons(road: Road) -> list[tuple[int, list[tuple[float, float]]
             for s, x, y, hdg in sec_samples:
                 s_rel = s - s_start
                 perp_dir = hdg + perp_sign * math.pi / 2
-                d_inner = sum(_lane_width_at(l, s_rel) for l in inner_lanes)
+                d_inner = sum(_lane_width_at(ln, s_rel) for ln in inner_lanes)
                 d_outer = d_inner + _lane_width_at(lane, s_rel)
                 xi = x + d_inner * math.cos(perp_dir)
                 yi = y + d_inner * math.sin(perp_dir)
@@ -479,6 +485,127 @@ def load_from_mcap(path: str) -> tuple[str | None, dict[int, dict]]:
     return xodr_xml, trajectories
 
 
+_OL_TYPE_MAP: dict[str, tuple[str, str]] = {
+    "car": ("VEHICLE", "CAR"), "van": ("VEHICLE", "VAN"),
+    "taxi": ("VEHICLE", "CAR"), "automobile": ("VEHICLE", "CAR"),
+    "truck": ("VEHICLE", "TRUCK"), "bus": ("VEHICLE", "BUS"),
+    "railvehicle": ("VEHICLE", "RAILVEHICLE"), "tram": ("VEHICLE", "RAILVEHICLE"),
+    "train": ("VEHICLE", "RAILVEHICLE"), "bicycle": ("VEHICLE", "BICYCLE"),
+    "cyclist": ("VEHICLE", "BICYCLE"), "motorcycle": ("VEHICLE", "MOTORCYCLE"),
+    "trailer": ("VEHICLE", "TRAILER"), "tractor": ("VEHICLE", "TRACTOR"),
+    "pedestrian": ("PEDESTRIAN", "OTHER"), "human": ("PEDESTRIAN", "OTHER"),
+    "animal": ("ANIMAL", "OTHER"),
+    "unknown": ("UNKNOWN", "OTHER"),
+}
+
+
+def _classify_openlabel_type(label_type: str) -> tuple[str, str]:
+    """Map raw OpenLabel type string to (category, subtype) matching CSV/MCAP hierarchy."""
+    return _OL_TYPE_MAP.get(label_type.strip().lower(), ("OTHER", "OTHER"))
+
+
+class NeedsFpsError(Exception):
+    """Raised when OpenLabel has no timestamps and fps is needed."""
+
+
+def _parse_timestamp_nanos(ts: str) -> int:
+    """Parse "HH:MM:SS.ffffff" to integer nanoseconds."""
+    h, m, rest = ts.split(":")
+    if "." in rest:
+        s, frac = rest.split(".")
+    else:
+        s, frac = rest, "0"
+    us = int(frac.ljust(6, "0")[:6])
+    return (int(h) * 3600 + int(m) * 60 + int(s)) * 1_000_000_000 + us * 1000
+
+
+def _vec_named(od_data: dict, *names: str) -> list[float] | None:
+    """Return first matching named vec entry (>=3 elements) from object_data dict."""
+    for entry in od_data.get("vec", []) or []:
+        if isinstance(entry, dict) and entry.get("name") in names:
+            v = entry.get("val")
+            if isinstance(v, list) and len(v) >= 3:
+                return [float(x) for x in v[:3]]
+    return None
+
+
+def load_from_openlabel(path: str, fps: float | None = None) -> dict[int, dict]:
+    """Load corrected OpenLABEL (cuboid required). Returns same format as load_trajectories_full."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    root = data.get("openlabel", data)
+
+    obj_meta: dict[str, tuple[str, str]] = {}
+    for oid_str, obj in root.get("objects", {}).items():
+        obj_meta[oid_str] = _classify_openlabel_type(obj.get("type", ""))
+
+    frames_dict = root.get("frames", {})
+
+    has_timestamps = any(
+        fd.get("frame_properties", {}).get("timestamp")
+        for fd in frames_dict.values()
+    )
+    if not has_timestamps and fps is None:
+        raise NeedsFpsError("No timestamps found in OpenLabel; fps required")
+
+    obj_frames: dict[str, list[dict]] = {}
+    has_cuboid_overall = False
+
+    for frame_key in sorted(frames_dict.keys(), key=lambda k: int(k)):
+        frame_idx = int(frame_key)
+        fdata = frames_dict[frame_key]
+        fp = fdata.get("frame_properties", {})
+        ts = fp.get("timestamp")
+        nano = _parse_timestamp_nanos(ts) if ts else int(round(frame_idx * 1e9 / fps))
+
+        for oid_str, odata in fdata.get("objects", {}).items():
+            cuboids = odata.get("object_data", {}).get("cuboid", [])
+            if not cuboids:
+                continue
+            has_cuboid_overall = True
+            val = cuboids[0]["val"]  # [X, Y, Z, rx, ry, rz, L, W, H]
+            dev = _vec_named(odata.get("object_data", {}), "size_deviation_geo", "size_deviation")
+            obj_frames.setdefault(oid_str, []).append({
+                "total_nanos": nano,
+                "x": float(val[0]), "y": float(val[1]),
+                "length": float(val[6]), "width": float(val[7]),
+                "height": float(val[8]), "yaw": float(val[5]),
+                "dev_l": dev[0] if dev else float("nan"),
+                "dev_w": dev[1] if dev else float("nan"),
+                "dev_h": dev[2] if dev else float("nan"),
+            })
+
+    if not has_cuboid_overall:
+        raise ValueError(
+            "pixel-only OpenLabel not supported; re-run cosmo correct with "
+            "--output-coords geo or both"
+        )
+
+    result: dict[int, dict] = {}
+    for oid_str, frame_rows in obj_frames.items():
+        oid = int(oid_str)
+        tname, sname = obj_meta.get(oid_str, ("OTHER", "OTHER"))
+        frame_df = pd.DataFrame(frame_rows).set_index("total_nanos")
+        xy = frame_df[["x", "y"]].values
+        nanos = frame_df.index.values.astype(np.int64)
+        size_std = _vec_named(
+            root.get("objects", {}).get(oid_str, {}).get("object_data", {}),
+            "size_std_geo", "size_std",
+        )
+        result[oid] = {
+            "type": tname,
+            "subtype": sname,
+            "xy": xy,
+            "nanos": nanos,
+            "nanos_set": set(nanos.tolist()),
+            "df": frame_df,
+            "size_std": size_std,
+        }
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Scene building helpers
 # ---------------------------------------------------------------------------
@@ -506,7 +633,7 @@ def _add_traj_paths(
     trajectories: dict[int, dict],
     obj_colors: dict[int, QtGui.QColor],
     path_alpha: int = 255,
-    dashed: bool = False,
+    pen_style=None,
 ) -> dict[int, QtWidgets.QGraphicsPathItem]:
     """Add trajectory path items to scene; return {obj_id: item}."""
     items: dict[int, QtWidgets.QGraphicsPathItem] = {}
@@ -518,8 +645,8 @@ def _add_traj_paths(
         color.setAlpha(path_alpha)
         pen = QtGui.QPen(color)
         pen.setWidthF(0.3)
-        if dashed:
-            pen.setStyle(_dash_line())
+        if pen_style is not None:
+            pen.setStyle(pen_style)
         path = QtGui.QPainterPath()
         path.moveTo(float(xy[0, 0]), -float(xy[0, 1]))
         for px, py in xy[1:]:
@@ -584,35 +711,35 @@ def build_scene(
 class TrajectoryExplorer(QtWidgets.QMainWindow):
     """Interactive viewer for OpenDRIVE maps and CSV trajectories."""
 
-    def __init__(self, xodr_path: str | None = None, csv_path: str | None = None,
-                 mcap_path: str | None = None, smooth_window: int = 5,
-                 smooth_sigma: float | None = None):
+    def __init__(self, xodr_path: str | None = None, slot_a: str | None = None,
+                 slot_b: str | None = None, slot_c: str | None = None,
+                 smooth_window: int = 5, smooth_sigma: float | None = None):
         super().__init__()
         self._xodr_path = xodr_path or ""
-        self._csv_path_a = csv_path or ""
-        self._csv_path_b = ""
-        self._mcap_path = mcap_path or ""
+        self._slot_path_a: str | None = slot_a or None
+        self._slot_path_b: str | None = slot_b or None
+        self._slot_path_c: str | None = slot_c or None
         self._smooth_window = smooth_window
         self._smooth_sigma = smooth_sigma if smooth_sigma is not None else smooth_window / 2
         self.setWindowTitle("Trajectory Explorer")
         self.resize(1400, 900)
 
-        # Per-frame data (CSV mode)
         self._trajs_a: dict[int, dict] = {}
         self._trajs_b: dict[int, dict] = {}
+        self._trajs_c: dict[int, dict] = {}
         self._all_nanos: list[int] = []
         self._frame_idx: int = 0
         self._fps: int = 30
         self._obj_colors: dict[int, QtGui.QColor] = {}
         self._checked_oids: set[int] = set()
 
-        # Graphics items
         self._traj_items_a: dict[int, QtWidgets.QGraphicsPathItem] = {}
         self._traj_items_b: dict[int, QtWidgets.QGraphicsPathItem] = {}
+        self._traj_items_c: dict[int, QtWidgets.QGraphicsPathItem] = {}
         self._rect_items_a: dict[int, QtWidgets.QGraphicsPolygonItem] = {}
         self._rect_items_b: dict[int, QtWidgets.QGraphicsPolygonItem] = {}
+        self._rect_items_c: dict[int, QtWidgets.QGraphicsPolygonItem] = {}
 
-        # Tree data
         self._type_subtype_objs: dict[str, dict[str, list[int]]] = {}
         self._frameless_oids: set[int] = set()
         self._speed_kmh: bool = False
@@ -632,7 +759,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
         self._connect_signals()
 
-        if self._mcap_path or self._xodr_path:
+        if any([self._slot_path_a, self._slot_path_b, self._slot_path_c, self._xodr_path]):
             self._reload()
 
     # ------------------------------------------------------------------
@@ -644,30 +771,30 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
         self.btn_xodr = QtWidgets.QPushButton("Open XODR")
         self.lbl_xodr = QtWidgets.QLabel(self._xodr_path or "—")
-        self.lbl_xodr.setStyleSheet("color:#6b7280; max-width:300px;")
+        self.lbl_xodr.setStyleSheet("color:#6b7280; max-width:200px;")
 
-        self.btn_csv_a = QtWidgets.QPushButton("Open CSV A")
-        self.lbl_csv_a = QtWidgets.QLabel(self._csv_path_a or "—")
-        self.lbl_csv_a.setStyleSheet("color:#6b7280; max-width:300px;")
-        self.btn_clear_csv_a = QtWidgets.QPushButton("Clear A")
+        self.btn_a = QtWidgets.QPushButton("Open A")
+        self.lbl_a = QtWidgets.QLabel(self._slot_path_a or "—")
+        self.lbl_a.setStyleSheet("color:#6b7280; max-width:200px;")
+        self.btn_clear_a = QtWidgets.QPushButton("Clear A")
 
-        self.btn_csv_b = QtWidgets.QPushButton("Open CSV B")
-        self.lbl_csv_b = QtWidgets.QLabel("—")
-        self.lbl_csv_b.setStyleSheet("color:#6b7280; max-width:300px;")
-        self.btn_clear_csv_b = QtWidgets.QPushButton("Clear B")
+        self.btn_b = QtWidgets.QPushButton("Open B")
+        self.lbl_b = QtWidgets.QLabel(self._slot_path_b or "—")
+        self.lbl_b.setStyleSheet("color:#6b7280; max-width:200px;")
+        self.btn_clear_b = QtWidgets.QPushButton("Clear B")
 
-        self.btn_mcap = QtWidgets.QPushButton("Open MCAP")
-        self.lbl_mcap = QtWidgets.QLabel(self._mcap_path or "—")
-        self.lbl_mcap.setStyleSheet("color:#6b7280; max-width:200px;")
-        self.btn_clear_mcap = QtWidgets.QPushButton("Clear MCAP")
+        self.btn_c = QtWidgets.QPushButton("Open C")
+        self.lbl_c = QtWidgets.QLabel(self._slot_path_c or "—")
+        self.lbl_c.setStyleSheet("color:#6b7280; max-width:200px;")
+        self.btn_clear_c = QtWidgets.QPushButton("Clear C")
 
         self.btn_fit = QtWidgets.QPushButton("Fit View")
 
         for w in (
             self.btn_xodr, self.lbl_xodr,
-            self.btn_csv_a, self.lbl_csv_a, self.btn_clear_csv_a,
-            self.btn_csv_b, self.lbl_csv_b, self.btn_clear_csv_b,
-            self.btn_mcap, self.lbl_mcap, self.btn_clear_mcap,
+            self.btn_a, self.lbl_a, self.btn_clear_a,
+            self.btn_b, self.lbl_b, self.btn_clear_b,
+            self.btn_c, self.lbl_c, self.btn_clear_c,
             self.btn_fit,
         ):
             tb.addWidget(w)
@@ -700,9 +827,9 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         splitter_left.addWidget(self.view)
 
         self._data_table = QtWidgets.QTableWidget()
-        self._data_table.setColumnCount(11)
+        self._data_table.setColumnCount(12)
         self._data_table.setHorizontalHeaderLabels(
-            ["Src", "ID", "X", "Y", "Speed m/s", "Speed-s m/s", "Yaw°", "L×W×H", "Type", "Subtype", "Role"]
+            ["Src", "ID", "X", "Y", "Speed m/s", "Speed-s m/s", "Yaw°", "L×W×H", "ΔL×W×H", "Type", "Subtype", "Role"]
         )
         self._data_table.setMinimumHeight(120)
         self._data_table.setEditTriggers(
@@ -783,13 +910,13 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
     def _connect_signals(self) -> None:
         self.btn_xodr.clicked.connect(self._open_xodr)
-        self.btn_csv_a.clicked.connect(self._open_csv_a)
-        self.btn_csv_b.clicked.connect(self._open_csv_b)
-        self.btn_mcap.clicked.connect(self._open_mcap)
+        self.btn_a.clicked.connect(lambda: self._open_slot("a"))
+        self.btn_b.clicked.connect(lambda: self._open_slot("b"))
+        self.btn_c.clicked.connect(lambda: self._open_slot("c"))
+        self.btn_clear_a.clicked.connect(lambda: self._clear_slot("a"))
+        self.btn_clear_b.clicked.connect(lambda: self._clear_slot("b"))
+        self.btn_clear_c.clicked.connect(lambda: self._clear_slot("c"))
         self.btn_fit.clicked.connect(self._fit)
-        self.btn_clear_csv_a.clicked.connect(self._clear_csv_a)
-        self.btn_clear_csv_b.clicked.connect(self._clear_csv_b)
-        self.btn_clear_mcap.clicked.connect(self._clear_mcap)
         self.view.wheelEvent = self._wheel_zoom  # type: ignore[assignment]
         self._btn_select_all.clicked.connect(lambda: self._set_all(_CHECKED))
         self._btn_deselect_all.clicked.connect(lambda: self._set_all(_UNCHECKED))
@@ -812,41 +939,40 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             self.lbl_xodr.setText(path)
             self._reload()
 
-    def _open_csv_a(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open CSV A", "", "CSV (*.csv);;All (*)")
+    def _open_slot(self, slot: str) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, f"Open {slot.upper()}", "",
+            "Trajectory file (*.csv *.mcap *.json);;All (*)",
+        )
         if path:
-            self._csv_path_a = path
-            self.lbl_csv_a.setText(path)
+            setattr(self, f"_slot_path_{slot}", path)
+            getattr(self, f"lbl_{slot}").setText(path)
             self._reload()
 
-    def _open_csv_b(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open CSV B", "", "CSV (*.csv);;All (*)")
-        if path:
-            self._csv_path_b = path
-            self.lbl_csv_b.setText(path)
-            self._reload()
-
-    def _open_mcap(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open MCAP", "", "MCAP (*.mcap);;All (*)")
-        if path:
-            self._mcap_path = path
-            self.lbl_mcap.setText(path)
-            self._reload()
-
-    def _clear_csv_a(self):
-        self._csv_path_a = ""
-        self.lbl_csv_a.setText("—")
+    def _clear_slot(self, slot: str) -> None:
+        setattr(self, f"_slot_path_{slot}", None)
+        getattr(self, f"lbl_{slot}").setText("—")
         self._reload()
 
-    def _clear_csv_b(self):
-        self._csv_path_b = ""
-        self.lbl_csv_b.setText("—")
-        self._reload()
-
-    def _clear_mcap(self):
-        self._mcap_path = ""
-        self.lbl_mcap.setText("—")
-        self._reload()
+    def _load_slot(self, path: str) -> tuple[str | None, dict[int, dict]]:
+        """Detect format by extension and load trajectories."""
+        ext = Path(path).suffix.lower()
+        if ext == ".csv":
+            return None, load_trajectories_full(path)
+        elif ext == ".mcap":
+            return load_from_mcap(path)
+        elif ext == ".json":
+            try:
+                return None, load_from_openlabel(path)
+            except NeedsFpsError:
+                fps, ok = QtWidgets.QInputDialog.getDouble(
+                    self, "OpenLabel FPS", "Frames per second:", 30.0, 0.1, 1000.0, 2
+                )
+                if not ok:
+                    return None, {}
+                return None, load_from_openlabel(path, fps=fps)
+        else:
+            raise ValueError(f"Unsupported file type: {path}")
 
     def _fit(self):
         self.view.fitInView(self.scene.sceneRect(), _keep_aspect_ratio())
@@ -869,72 +995,77 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self.scene.clear()
         self._traj_items_a = {}
         self._traj_items_b = {}
+        self._traj_items_c = {}
         self._rect_items_a = {}
         self._rect_items_b = {}
+        self._rect_items_c = {}
         self._all_nanos = []
         self._frame_idx = 0
         self._slider.setRange(0, 0)
         self._lbl_frame.setText("frame 0/0  t=0.0s")
         self._data_table.setRowCount(0)
 
-        if self._mcap_path:
-            self._reload_mcap()
-        elif self._xodr_path:
-            self._reload_xodr_csv()
+        xodr_xml_a = xodr_xml_b = xodr_xml_c = None
+        self._trajs_a, self._trajs_b, self._trajs_c = {}, {}, {}
 
-    def _reload_mcap(self):
-        try:
-            xodr_xml, trajectories = load_from_mcap(self._mcap_path)
-        except Exception as exc:
-            self.scene.addText(f"Error loading MCAP: {exc}")
-            return
+        for attr, path in [
+            ("_trajs_a", self._slot_path_a),
+            ("_trajs_b", self._slot_path_b),
+            ("_trajs_c", self._slot_path_c),
+        ]:
+            if not path:
+                continue
+            try:
+                xodr_xml, trajs = self._load_slot(path)
+                setattr(self, attr, trajs)
+                if attr == "_trajs_a":
+                    xodr_xml_a = xodr_xml
+                elif attr == "_trajs_b":
+                    xodr_xml_b = xodr_xml
+                else:
+                    xodr_xml_c = xodr_xml
+            except Exception as exc:
+                print(f"Warning: could not load {path}: {exc}")
+
         roads, parking = [], []
-        if xodr_xml:
+        if self._xodr_path:
             try:
-                roads, parking, _ = parse_xodr_text(xodr_xml)
+                roads, parking, _ = parse_xodr(self._xodr_path)
             except Exception as exc:
-                print(f"Warning: could not parse embedded XODR: {exc}")
-        self._finish_reload_basic(roads, parking, trajectories)
+                self.scene.addText(f"Error loading XODR: {exc}")
+                return
+        else:
+            for xodr_xml in [xodr_xml_a, xodr_xml_b, xodr_xml_c]:
+                if xodr_xml:
+                    try:
+                        roads, parking, _ = parse_xodr_text(xodr_xml)
+                    except Exception as exc:
+                        print(f"Warning: could not parse embedded XODR: {exc}")
+                    break
 
-    def _reload_xodr_csv(self):
-        try:
-            roads, parking, _ = parse_xodr(self._xodr_path)
-        except Exception as exc:
-            self.scene.addText(f"Error loading XODR: {exc}")
-            return
+        self._rebuild_ui_and_scene(roads, parking)
 
-        self._trajs_a = {}
-        self._trajs_b = {}
-        if self._csv_path_a:
-            try:
-                self._trajs_a = load_trajectories_full(self._csv_path_a)
-            except Exception as exc:
-                print(f"Warning: could not load CSV A: {exc}")
-        if self._csv_path_b:
-            try:
-                self._trajs_b = load_trajectories_full(self._csv_path_b)
-            except Exception as exc:
-                print(f"Warning: could not load CSV B: {exc}")
-
-        all_ids = set(self._trajs_a) | set(self._trajs_b)
+    def _rebuild_ui_and_scene(self, roads, parking) -> None:
+        all_ids = set(self._trajs_a) | set(self._trajs_b) | set(self._trajs_c)
         self._obj_colors = _build_obj_colors(all_ids)
         self._build_type_subtype_objs()
         self._frameless_oids = {
             oid for oid in all_ids
             if not self._trajs_a.get(oid, {}).get("nanos_set")
             and not self._trajs_b.get(oid, {}).get("nanos_set")
+            and not self._trajs_c.get(oid, {}).get("nanos_set")
         }
 
-        # Build sorted union of all timestamps
         nanos_set: set[int] = set()
-        for obj in self._trajs_a.values():
-            nanos_set.update(obj["nanos_set"])
-        for obj in self._trajs_b.values():
-            nanos_set.update(obj["nanos_set"])
+        for trajs in (self._trajs_a, self._trajs_b, self._trajs_c):
+            for obj in trajs.values():
+                if obj.get("nanos_set"):
+                    nanos_set.update(obj["nanos_set"])
         self._all_nanos = _build_full_timeline(nanos_set)
 
         path_alpha = 80 if self._all_nanos else 255
         road_map = {r.id: r for r in roads}
+
         self._traj_items_a = build_scene(
             self.scene, roads, parking, road_map,
             self._trajs_a, self._obj_colors, path_alpha=path_alpha,
@@ -942,13 +1073,17 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         if self._trajs_b:
             self._traj_items_b = _add_traj_paths(
                 self.scene, self._trajs_b, self._obj_colors,
-                path_alpha=path_alpha, dashed=True,
+                path_alpha=path_alpha, pen_style=_dash_line(),
+            )
+        if self._trajs_c:
+            self._traj_items_c = _add_traj_paths(
+                self.scene, self._trajs_c, self._obj_colors,
+                path_alpha=path_alpha, pen_style=_dash_dot_line(),
             )
 
-        if self._trajs_a:
-            self._compute_smooth_speed(self._trajs_a)
-        if self._trajs_b:
-            self._compute_smooth_speed(self._trajs_b)
+        for trajs in (self._trajs_a, self._trajs_b, self._trajs_c):
+            if trajs:
+                self._compute_smooth_speed(trajs)
 
         self._build_playback_items()
         self._build_tree()
@@ -960,27 +1095,11 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
         self.view.fitInView(self.scene.sceneRect(), _keep_aspect_ratio())
 
-    def _finish_reload_basic(self, roads, parking, trajectories):
-        """Finish reload without playback (MCAP path)."""
-        all_ids = set(trajectories.keys())
-        self._obj_colors = _build_obj_colors(all_ids)
-        road_map = {r.id: r for r in roads}
-
-        self._type_subtype_objs = {}
-        for oid, info in trajectories.items():
-            tname, sname = info["type"], info.get("subtype", "OTHER")
-            self._type_subtype_objs.setdefault(tname, {}).setdefault(sname, []).append(oid)
-
-        self._traj_items_a = build_scene(
-            self.scene, roads, parking, road_map,
-            trajectories, self._obj_colors, path_alpha=255,
-        )
-        self._build_tree()
-        self.view.fitInView(self.scene.sceneRect(), _keep_aspect_ratio())
-
     def _build_type_subtype_objs(self) -> None:
-        """Populate _type_subtype_objs from A∪B; A's type/subtype wins for shared ids."""
+        """Populate _type_subtype_objs from A∪B∪C; A wins over B wins over C for shared ids."""
         combined: dict[int, tuple[str, str]] = {}
+        for oid, info in self._trajs_c.items():
+            combined[oid] = (info["type"], info.get("subtype", "OTHER"))
         for oid, info in self._trajs_b.items():
             combined[oid] = (info["type"], info.get("subtype", "OTHER"))
         for oid, info in self._trajs_a.items():
@@ -1012,7 +1131,8 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             filled = np.where(valid, raw, 0.0)
             weight_sum = np.convolve(valid.astype(float), kernel, mode="same")
             value_sum = np.convolve(filled, kernel, mode="same")
-            obj["speed_smooth"] = np.where(weight_sum > 0, value_sum / weight_sum, float("nan"))
+            safe_denom = np.where(weight_sum > 0, weight_sum, 1.0)
+            obj["speed_smooth"] = np.where(weight_sum > 0, value_sum / safe_denom, float("nan"))
             obj["nanos_to_idx"] = {int(n): i for i, n in enumerate(nanos)}
 
     # ------------------------------------------------------------------
@@ -1046,6 +1166,18 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             item.setVisible(False)
             self._rect_items_b[oid] = item
 
+        for oid in self._trajs_c:
+            color = self._obj_colors.get(oid, QtGui.QColor(220, 0, 0))
+            fill = QtGui.QColor(color)
+            fill.setAlpha(50)
+            pen = QtGui.QPen(color)
+            pen.setWidthF(0.3)
+            pen.setStyle(_dash_dot_line())
+            item = self.scene.addPolygon(empty, pen, QtGui.QBrush(fill))
+            item.setZValue(10)
+            item.setVisible(False)
+            self._rect_items_c[oid] = item
+
     # ------------------------------------------------------------------
     # Frame update
     # ------------------------------------------------------------------
@@ -1056,6 +1188,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
         self._update_rect_items(self._trajs_a, self._rect_items_a, nanos)
         self._update_rect_items(self._trajs_b, self._rect_items_b, nanos)
+        self._update_rect_items(self._trajs_c, self._rect_items_c, nanos)
         self._update_data_table(nanos)
 
         total = len(self._all_nanos)
@@ -1093,9 +1226,9 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
     def _update_data_table(self, nanos: int) -> None:
         rows = []
-        all_oids = sorted(set(self._trajs_a) | set(self._trajs_b))
+        all_oids = sorted(set(self._trajs_a) | set(self._trajs_b) | set(self._trajs_c))
         for oid in all_oids:
-            for src_label, trajs in [("A", self._trajs_a), ("B", self._trajs_b)]:
+            for src_label, trajs in [("A", self._trajs_a), ("B", self._trajs_b), ("C", self._trajs_c)]:
                 if oid not in trajs or oid not in self._checked_oids:
                     continue
                 obj = trajs[oid]
@@ -1128,8 +1261,15 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             sname = _get_str_col(row, "subtype_name", obj.get("subtype", ""))
             rname = _get_str_col(row, "role_name", "")
 
+            dev_l = _get_col(row, "dev_l", float("nan"))
+            dev_w = _get_col(row, "dev_w", float("nan"))
+            dev_h = _get_col(row, "dev_h", float("nan"))
+            if all(math.isfinite(v) for v in [dev_l, dev_w, dev_h]):
+                dev_str = f"{dev_l:+.2f}×{dev_w:+.2f}×{dev_h:+.2f}"
+            else:
+                dev_str = "—"
             cells = [src, str(oid), f"{x:.1f}", f"{y:.1f}", f"{speed:.2f}", speed_s_str,
-                     f"{yaw_deg:.1f}", f"{L:.1f}×{W:.1f}×{H:.1f}", tname, sname, rname]
+                     f"{yaw_deg:.1f}", f"{L:.1f}×{W:.1f}×{H:.1f}", dev_str, tname, sname, rname]
             for c_idx, val in enumerate(cells):
                 self._data_table.setItem(r_idx, c_idx, QtWidgets.QTableWidgetItem(val))
 
@@ -1197,7 +1337,13 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
                         leaf.setToolTip(0, "No frames in timeline")
                     else:
                         leaf.setForeground(0, QtGui.QBrush(color))
-                        leaf.setToolTip(0, "Double-click to jump to first frame")
+                        obj = (self._trajs_a.get(oid) or self._trajs_b.get(oid)
+                               or self._trajs_c.get(oid))
+                        tt = "Double-click to jump to first frame"
+                        std = obj.get("size_std") if obj else None
+                        if std:
+                            tt += f"\nSize σ: {std[0]:.2f}×{std[1]:.2f}×{std[2]:.2f} m"
+                        leaf.setToolTip(0, tt)
                     _set_color_swatch(leaf, color)
                     self._checked_oids.add(oid)
                 sub_item.setExpanded(True)
@@ -1246,7 +1392,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             self._checked_oids.add(oid)
         else:
             self._checked_oids.discard(oid)
-        for items in (self._traj_items_a, self._traj_items_b):
+        for items in (self._traj_items_a, self._traj_items_b, self._traj_items_c):
             if oid in items:
                 items[oid].setVisible(visible)
         # Rect items visibility handled by next _update_frame call
@@ -1272,7 +1418,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         except (ValueError, IndexError):
             return
         first_nano = None
-        for trajs in (self._trajs_a, self._trajs_b):
+        for trajs in (self._trajs_a, self._trajs_b, self._trajs_c):
             if oid in trajs and trajs[oid].get("nanos_set"):
                 candidate = min(trajs[oid]["nanos_set"])
                 if first_nano is None or candidate < first_nano:
@@ -1338,8 +1484,10 @@ def _get_str_col(row: pd.Series, col: str, default: str = "") -> str:
 def main():
     parser = argparse.ArgumentParser(description="XODR + trajectory viewer")
     parser.add_argument("--xodr", help="Path to .xodr file")
-    parser.add_argument("--csv", help="Path to trajectory CSV file (CSV A)")
-    parser.add_argument("--mcap", help="Path to MCAP file (contains map + trajectories)")
+    parser.add_argument("--a", dest="slot_a", metavar="PATH",
+                        help="Slot A: .csv, .mcap, or .json (OpenLabel)")
+    parser.add_argument("--b", dest="slot_b", metavar="PATH", help="Slot B")
+    parser.add_argument("--c", dest="slot_c", metavar="PATH", help="Slot C")
     parser.add_argument("--smooth-window", type=int, default=5,
         help="Half-width of Gaussian smoothing window in frames (default: 5)")
     parser.add_argument("--smooth-sigma", type=float, default=None,
@@ -1347,8 +1495,10 @@ def main():
     args = parser.parse_args()
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    win = TrajectoryExplorer(xodr_path=args.xodr, csv_path=args.csv, mcap_path=args.mcap,
-                             smooth_window=args.smooth_window, smooth_sigma=args.smooth_sigma)
+    win = TrajectoryExplorer(
+        xodr_path=args.xodr, slot_a=args.slot_a, slot_b=args.slot_b, slot_c=args.slot_c,
+        smooth_window=args.smooth_window, smooth_sigma=args.smooth_sigma,
+    )
     win.show()
     try:
         app.exec_()

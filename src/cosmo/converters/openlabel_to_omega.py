@@ -178,6 +178,22 @@ def _resolve_height(
     return float(defaults.get(key, defaults.get("other", {})).get("height", 1.5))
 
 
+def build_towed_by(root: Dict[str, Any], objects_meta: Dict[str, Any]) -> Dict[str, str]:
+    """Map trailer_uid → towing vehicle type from openlabel 'towed-by' relations."""
+    result: Dict[str, str] = {}
+    for rel in (root.get("relations") or {}).values():
+        if rel.get("type") == "towed-by":
+            subjects = rel.get("rdf_subjects", [])
+            objects_ = rel.get("rdf_objects", [])
+            if subjects and objects_:
+                trailer_uid = str(subjects[0].get("uid", ""))
+                tower_uid = str(objects_[0].get("uid", ""))
+                tower_type = objects_meta.get(tower_uid, {}).get("type", "")
+                if trailer_uid and tower_type:
+                    result[trailer_uid] = tower_type.lower()
+    return result
+
+
 # -----------------------------------------------------------------------------
 # ORBIT georef + calibration loading
 # -----------------------------------------------------------------------------
@@ -494,6 +510,7 @@ def convert_openlabel_to_omega(
     strip_xodr_namespace: bool = False,
     log_fn: Optional[Callable[[str], None]] = None,
     corrector=None,
+    stabilize_size: bool = False,
 ):
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP.
@@ -513,21 +530,11 @@ def convert_openlabel_to_omega(
     ol = load_json(openlabel_path)
     objects_meta, frames = parse_openlabel(ol)
 
-    # Build trailer_uid -> towing_vehicle_type from "towed-by" relations
-    towed_by: Dict[str, str] = {}
-    for rel in (ol.get("openlabel", ol).get("relations") or {}).values():
-        if rel.get("type") == "towed-by":
-            subjects = rel.get("rdf_subjects", [])
-            objects_ = rel.get("rdf_objects", [])
-            if subjects and objects_:
-                trailer_uid = str(subjects[0].get("uid", ""))
-                tower_uid = str(objects_[0].get("uid", ""))
-                tower_type = objects_meta.get(tower_uid, {}).get("type", "")
-                if trailer_uid and tower_type:
-                    towed_by[trailer_uid] = tower_type.lower()
+    root = ol.get("openlabel", ol)
+    towed_by = build_towed_by(root, objects_meta)
 
     _ont_urls = [
-        url for url in (ol.get("openlabel", ol).get("ontologies") or {}).values()
+        url for url in (root.get("ontologies") or {}).values()
         if isinstance(url, str) and url.startswith("http")
     ]
     mapper = OntologyMapper(_ont_urls)
@@ -624,6 +631,34 @@ def convert_openlabel_to_omega(
         last_positions[idx] = (X, Y, Z)
         last_velocities[idx] = vel
 
+    def _collect_all_dims() -> Dict[str, Tuple[float, float, float]]:
+        """Pass over all frames collecting per-object geo dims; return per-object mean."""
+        geo_sizes: Dict[str, List[Tuple[float, float, float]]] = {}
+        for frame_id, _ in sorted_frames:
+            frame = frames[frame_id]
+            for oid, od in frame["objects"].items():
+                cx, cy, w_px, h_px, yaw_img = od["rbbox"]
+                meta = objects_meta.get(oid, {})
+                label_type = meta.get("type", "other")
+                heading_world = angle_wrap(
+                    -float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0)
+                )
+                h_veh = _resolve_height(label_type, oid, towed_by, defaults)
+                if corrector is not None:
+                    _r = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)
+                    dims = (_r.length, _r.width, _r.height)
+                elif H is not None:
+                    lw = _footprint_from_homography(H, cx, cy, w_px, h_px, yaw_img, heading_world)
+                    dims = (lw[0], lw[1], h_veh)
+                else:
+                    dims = estimate_dims(label_type, w_px, h_px, oid)
+                geo_sizes.setdefault(oid, []).append(dims)
+        return {
+            oid: tuple(np.array(v).mean(axis=0).tolist())
+            for oid, v in geo_sizes.items()
+        }
+
+    size_avg: Dict[str, Tuple[float, float, float]] = _collect_all_dims() if stabilize_size else {}
 
     # ----------------------------
     # MCAP writing (patched)
@@ -706,6 +741,9 @@ def convert_openlabel_to_omega(
                             height = h_veh
                         else:
                             length, width, height = estimate_dims(label_type, w_px, h_px, oid)
+
+                    if stabilize_size:
+                        length, width, height = size_avg.get(oid, (length, width, height))
 
                     vel, acc = compute_kinematics(idx, X, Y, Z)
                     yaw = angle_wrap(heading_world + float(yaw_offset_rad))
@@ -805,6 +843,9 @@ def convert_openlabel_to_omega(
                         height = h_veh
                     else:
                         length, width, height = estimate_dims(label_type, w_px, h_px, oid)
+
+                if stabilize_size:
+                    length, width, height = size_avg.get(oid, (length, width, height))
 
                 vel, acc = compute_kinematics(idx, X, Y, Z)
                 yaw = angle_wrap(heading_world + float(yaw_offset_rad))

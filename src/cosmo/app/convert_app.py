@@ -52,6 +52,9 @@ class ConvertConfig:
     camera_model: str = "mavic3pro-standard"
     hfov_deg: Optional[float] = None
 
+    # size stabilization
+    stabilize_size: bool = False
+
     # output control
     out_dir: Optional[str] = None  # If None => <project>/runs/<timestamp>_convert_<stem>/
     run_name: Optional[str] = None  # Optional override for the run folder name
@@ -257,6 +260,7 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         strip_xodr_namespace=cfg.strip_xodr_namespace,
         log_fn=log_fn,
         corrector=corrector,
+        stabilize_size=cfg.stabilize_size,
     )
 
     # determine produced outputs

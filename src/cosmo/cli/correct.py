@@ -55,6 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
             "'both': update rbbox AND add cuboid."
         ),
     )
+    ap.add_argument(
+        "--stabilize-size", action="store_true",
+        help="Replace per-frame dimensions with per-object average; add size_mean/size_std/size_deviation fields.",
+    )
     return ap
 
 
@@ -162,7 +166,11 @@ def main(argv=None) -> int:
         ol = json.load(f)
 
     # Load homography
-    from cosmo.converters.openlabel_to_omega import load_alignment, parse_openlabel
+    from cosmo.converters.openlabel_to_omega import (
+        load_alignment, parse_openlabel,
+        build_towed_by, _resolve_height, DEFAULT_DIMENSIONS_M,
+        _h_rotation_angle, angle_wrap,
+    )
     _, H, _ = load_alignment(args.calibration, args.georef_data, None)
     if H is None:
         ap.error("No homography found. Provide --georef-data or --calibration.")
@@ -188,12 +196,51 @@ def main(argv=None) -> int:
 
     # Parse to get object metadata + parsed frame data
     objects_meta, frames_parsed = parse_openlabel(ol)
+    towed_by = build_towed_by(root, objects_meta)
 
     raw_frames = root.get("frames", {})
     frame_items = list(raw_frames.items()) if isinstance(raw_frames, dict) else list(enumerate(raw_frames))
 
+    stabilize_size: bool = args.stabilize_size
+
+    # Pre-pass: collect per-object dims for stabilize_size
+    geo_sizes: dict[str, list] = {}
+    px_sizes: dict[str, list] = {}
+    correction_cache: dict[str, dict[str, object]] = {}
+    n_frames = len(frame_items)
+    if stabilize_size:
+        for i, (fkey, _) in enumerate(frame_items):
+            if i % 200 == 0:
+                print(f"  Pre-pass {i}/{n_frames} frames...", flush=True)
+            frame_id = str(fkey)
+            parsed_frame = frames_parsed.get(frame_id, {})
+            for oid, od in parsed_frame.get("objects", {}).items():
+                cx, cy, w_px, h_px, yaw_img = od["rbbox"]
+                meta = objects_meta.get(oid, {})
+                label_type = meta.get("type", "other")
+                h_veh = _resolve_height(label_type, oid, towed_by, DEFAULT_DIMENSIONS_M)
+                heading_world = angle_wrap(-float(yaw_img) + _h_rotation_angle(H, cx, cy))
+                res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh_override=h_veh)
+                correction_cache.setdefault(frame_id, {})[oid] = res
+                geo_sizes.setdefault(oid, []).append((res.length, res.width, res.height))
+                if needs_pixel:
+                    J = _px_per_m_at(H_inv, res.x, res.y)
+                    along = np.array([math.cos(yaw_img), math.sin(yaw_img)])
+                    across = np.array([-math.sin(yaw_img), math.cos(yaw_img)])
+                    px_sizes.setdefault(oid, []).append((
+                        res.length * float(np.linalg.norm(J @ along)),
+                        res.width * float(np.linalg.norm(J @ across)),
+                    ))
+
+        geo_mean = {oid: tuple(np.array(v).mean(axis=0).tolist()) for oid, v in geo_sizes.items()}
+        geo_std = {oid: tuple(np.array(v).std(axis=0).tolist()) for oid, v in geo_sizes.items()}
+        px_mean = {oid: tuple(np.array(v).mean(axis=0).tolist()) for oid, v in px_sizes.items()}
+        px_std = {oid: tuple(np.array(v).std(axis=0).tolist()) for oid, v in px_sizes.items()}
+
     n_corrected = 0
-    for fkey, fval in frame_items:
+    for i, (fkey, fval) in enumerate(frame_items):
+        if i % 200 == 0:
+            print(f"  Processing {i}/{n_frames} frames...", flush=True)
         frame_id = str(fkey)
         parsed_frame = frames_parsed.get(frame_id, {})
         frame_raw = fval if isinstance(fval, dict) else raw_frames[fkey]
@@ -202,7 +249,14 @@ def main(argv=None) -> int:
             cx, cy, w_px, h_px, yaw_img = od["rbbox"]
             meta = objects_meta.get(oid, {})
             label_type = meta.get("type", "other")
-            res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, float(yaw_img))
+            heading_world = angle_wrap(-float(yaw_img) + _h_rotation_angle(H, cx, cy))
+            if stabilize_size:
+                res = correction_cache[frame_id][oid]
+            else:
+                h_veh = _resolve_height(label_type, oid, towed_by, DEFAULT_DIMENSIONS_M)
+                res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh_override=h_veh)
+
+            geo_L, geo_W, geo_H = res.length, res.width, res.height
 
             od_data = _get_object_data(frame_raw, oid)
             if od_data is None:
@@ -213,16 +267,66 @@ def main(argv=None) -> int:
                 J = _px_per_m_at(H_inv, res.x, res.y)
                 along_world = np.array([math.cos(yaw_img), math.sin(yaw_img)])
                 across_world = np.array([-math.sin(yaw_img), math.cos(yaw_img)])
-                w_new = res.length * float(np.linalg.norm(J @ along_world))
-                h_new = res.width * float(np.linalg.norm(J @ across_world))
+                w_new = geo_L * float(np.linalg.norm(J @ along_world))
+                h_new = geo_W * float(np.linalg.norm(J @ across_world))
+
+                if stabilize_size:
+                    avg_px = px_mean.get(oid, (w_new, h_new))
+                    if output_coords in ("pixel", "both"):
+                        dev_pw, dev_ph = w_new - avg_px[0], h_new - avg_px[1]
+                    w_new, h_new = avg_px
+
                 _update_rbbox(od_data, [cx_new, cy_new, w_new, h_new, yaw_img])
 
             if needs_geo:
-                _add_cuboid(od_data, res.x, res.y, yaw_img, res.length, res.width, res.height)
+                if stabilize_size:
+                    avg_geo = geo_mean.get(oid, (geo_L, geo_W, geo_H))
+                    if output_coords in ("geo", "both"):
+                        dev_gL = geo_L - avg_geo[0]
+                        dev_gW = geo_W - avg_geo[1]
+                        dev_gH = geo_H - avg_geo[2]
+                    geo_L, geo_W, geo_H = avg_geo
+                _add_cuboid(od_data, res.x, res.y, heading_world, geo_L, geo_W, geo_H)
                 if output_coords == "geo":
                     _drop_rbbox(od_data)
 
+            if stabilize_size:
+                vec_list = od_data.get("vec")
+                if not isinstance(vec_list, list):
+                    od_data["vec"] = []
+                    vec_list = od_data["vec"]
+                if output_coords == "pixel":
+                    vec_list.append({"name": "size_deviation", "val": [dev_pw, dev_ph]})
+                elif output_coords == "geo":
+                    vec_list.append({"name": "size_deviation", "val": [dev_gL, dev_gW, dev_gH]})
+                else:  # both
+                    vec_list.append({"name": "size_deviation_pixel", "val": [dev_pw, dev_ph]})
+                    vec_list.append({"name": "size_deviation_geo", "val": [dev_gL, dev_gW, dev_gH]})
+
             n_corrected += 1
+
+    # Object-level mean/std entries
+    if stabilize_size:
+        for oid in geo_mean:
+            obj_entry = root.get("objects", {}).get(oid)
+            if obj_entry is None:
+                continue
+            obj_entry.setdefault("object_data", {})
+            vec_list = obj_entry["object_data"].get("vec")
+            if not isinstance(vec_list, list):
+                obj_entry["object_data"]["vec"] = []
+                vec_list = obj_entry["object_data"]["vec"]
+            if output_coords == "pixel":
+                vec_list.append({"name": "size_mean", "val": list(px_mean.get(oid, []))})
+                vec_list.append({"name": "size_std", "val": list(px_std.get(oid, []))})
+            elif output_coords == "geo":
+                vec_list.append({"name": "size_mean", "val": list(geo_mean[oid])})
+                vec_list.append({"name": "size_std", "val": list(geo_std[oid])})
+            else:  # both
+                vec_list.append({"name": "size_mean_pixel", "val": list(px_mean.get(oid, []))})
+                vec_list.append({"name": "size_std_pixel", "val": list(px_std.get(oid, []))})
+                vec_list.append({"name": "size_mean_geo", "val": list(geo_mean[oid])})
+                vec_list.append({"name": "size_std_geo", "val": list(geo_std[oid])})
 
     # Write output
     out_path = Path(args.output)

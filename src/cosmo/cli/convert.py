@@ -119,6 +119,10 @@ Examples:
     ob.add_argument("--hfov-deg", type=float, default=None, metavar="FLOAT",
                     help="Override horizontal FOV in degrees")
 
+    # Size stabilization
+    ap.add_argument("--stabilize-size", action="store_true",
+                    help="Use per-object average dimensions instead of per-frame dimensions.")
+
     # Run folder naming
     ap.add_argument("--run-name", required=False, help="Optional override for run folder name")
 
@@ -175,6 +179,7 @@ def main(argv=None) -> int:
         hfov_deg=args.hfov_deg,
         out_dir=args.out_dir,
         run_name=args.run_name,
+        stabilize_size=args.stabilize_size,
     )
 
     def _log(line: str) -> None:
