@@ -1269,7 +1269,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             else:
                 dev_str = "—"
             cells = [src, str(oid), f"{x:.1f}", f"{y:.1f}", f"{speed:.2f}", speed_s_str,
-                     f"{yaw_deg:.1f}", f"{L:.1f}×{W:.1f}×{H:.1f}", dev_str, tname, sname, rname]
+                     f"{yaw_deg:.1f}", f"{L:.2f}×{W:.2f}×{H:.2f}", dev_str, tname, sname, rname]
             for c_idx, val in enumerate(cells):
                 self._data_table.setItem(r_idx, c_idx, QtWidgets.QTableWidgetItem(val))
 
@@ -1342,7 +1342,14 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
                         tt = "Double-click to jump to first frame"
                         std = obj.get("size_std") if obj else None
                         if std:
-                            tt += f"\nSize σ: {std[0]:.2f}×{std[1]:.2f}×{std[2]:.2f} m"
+                            df = obj.get("df") if obj else None
+                            if df is not None and "length" in df.columns and len(df) > 0:
+                                mu = [df["length"].iloc[0], df["width"].iloc[0], df["height"].iloc[0]]
+                                pct = [s / m * 100 if m else float("nan") for s, m in zip(std, mu)]
+                                tt += (f"\nSize σ: {std[0]:.2f}×{std[1]:.2f}×{std[2]:.2f} m"
+                                       f"  ({pct[0]:.0f}%×{pct[1]:.0f}%×{pct[2]:.0f}%)")
+                            else:
+                                tt += f"\nSize σ: {std[0]:.2f}×{std[1]:.2f}×{std[2]:.2f} m"
                         leaf.setToolTip(0, tt)
                     _set_color_swatch(leaf, color)
                     self._checked_oids.add(oid)
