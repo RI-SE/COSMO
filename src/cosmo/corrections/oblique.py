@@ -71,11 +71,52 @@ def _cam_pos_from_gps(lat: float, lon: float, drone_height: float, proj_string: 
     return np.array([e, n, drone_height])
 
 
+def _decompose_H_to_P(H: np.ndarray, K: np.ndarray,
+                      nadir_world: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Decompose ground-plane homography H into a full 3×4 projection matrix.
+
+    H maps pixel (u,v,1) → world UTM (X,Y,1).  Working in nadir-centred local
+    coords avoids numerical ill-conditioning from large UTM offsets.
+
+    Returns:
+        P   — 3×4 matrix: P @ [X, Y, Z, 1] → homogeneous pixel (UTM world coords)
+        cam — camera centre in world UTM coordinates (3,)
+    """
+    H_inv = np.linalg.inv(H)                        # world UTM → pixel
+    nx, ny = float(nadir_world[0]), float(nadir_world[1])
+
+    # Shift world origin to nadir so the translation column ≈ [0, 0, 1/λ].
+    # H_local maps (X−nx, Y−ny, 1) → pixel.
+    T_shift = np.array([[1, 0, nx], [0, 1, ny], [0, 0, 1]], dtype=np.float64)
+    H_local = H_inv @ T_shift
+
+    # H_local = K @ [r1 | r2 | t_local]  (up to scale λ)
+    M    = np.linalg.inv(K) @ H_local
+    lam  = (np.linalg.norm(M[:, 0]) + np.linalg.norm(M[:, 1])) / 2.0
+    r1   = M[:, 0] / lam
+    r2   = M[:, 1] / lam
+    t_lo = M[:, 2] / lam
+    r3   = np.cross(r1, r2)
+    r3  /= np.linalg.norm(r3)
+    R    = np.column_stack([r1, r2, r3])
+
+    # Camera centre in local coords → back to global UTM.
+    cam_local = -R.T @ t_lo
+    cam_world = np.array([cam_local[0] + nx, cam_local[1] + ny, cam_local[2]])
+
+    # P for global UTM: t_global absorbs the nadir shift so that
+    # P @ [X, Y, 0, 1] == H_inv @ [X, Y, 1] for all ground points.
+    t_global = t_lo - R @ np.array([nx, ny, 0.0])
+    P = K @ np.column_stack([R, t_global.reshape(3, 1)])  # 3×4
+
+    return P, cam_world
+
+
 def _project_box_via_h(
     cx3d: float, cy3d: float, L: float, W: float, h_veh: float,
     heading_rad: float, H_inv: np.ndarray, cam_pos: np.ndarray,
 ) -> np.ndarray | None:
-    """Project 3D box to image via ground-shadow + H."""
+    """Project 3D box to image via ground-shadow + H^{-1}."""
     corners = _box3d_corners(cx3d, cy3d, L, W, h_veh, heading_rad)
     cz = cam_pos[2]
     pts = []
@@ -87,6 +128,21 @@ def _project_box_via_h(
         yg = cam_pos[1] + (wy - cam_pos[1]) * scale
         q = H_inv @ np.array([xg, yg, 1.0])
         if abs(q[2]) < 1e-12:
+            return None
+        pts.append([q[0] / q[2], q[1] / q[2]])
+    return np.array(pts)
+
+
+def _project_box_full_P(
+    cx3d: float, cy3d: float, L: float, W: float, h_veh: float,
+    heading_rad: float, P: np.ndarray,
+) -> np.ndarray | None:
+    """Project 3D box corners to image using the full 3×4 projection matrix P."""
+    corners = _box3d_corners(cx3d, cy3d, L, W, h_veh, heading_rad)
+    pts = []
+    for wx, wy, wz in corners:
+        q = P @ np.array([wx, wy, wz, 1.0])
+        if abs(q[2]) < 1e-12 or q[2] < 0:
             return None
         pts.append([q[0] / q[2], q[1] / q[2]])
     return np.array(pts)
@@ -153,6 +209,13 @@ class BboxCorrector:
         else:
             log.info("cam_pos H-derived=(%.1f,%.1f,%.1f)", h_pos[0], h_pos[1], h_pos[2])
             self._cam_pos = h_pos
+
+        # Full 3×4 projection matrix from H decomposition — used for 3D fitting.
+        # This is fully consistent with H so any 3D point projects to the correct pixel.
+        self._P, cam_decomp = _decompose_H_to_P(H, camera.K, self._nadir_xy)
+        log.info("cam_pos H-decomp=(%.1f,%.1f,%.1f), diff from h_pos=%.1fm",
+                 cam_decomp[0], cam_decomp[1], cam_decomp[2],
+                 float(np.linalg.norm(cam_decomp[:2] - h_pos[:2])))
 
     def correct(
         self,
