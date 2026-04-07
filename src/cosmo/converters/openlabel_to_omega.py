@@ -41,7 +41,6 @@ except ImportError:  # pragma: no cover
 
 from cosmo.converters.ontology_mapper import OntologyMapper
 
-
 # -----------------------------------------------------------------------------
 # Defaults
 # -----------------------------------------------------------------------------

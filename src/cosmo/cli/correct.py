@@ -167,9 +167,13 @@ def main(argv=None) -> int:
 
     # Load homography
     from cosmo.converters.openlabel_to_omega import (
-        load_alignment, parse_openlabel,
-        build_towed_by, _resolve_height, DEFAULT_DIMENSIONS_M,
-        _h_rotation_angle, angle_wrap,
+        DEFAULT_DIMENSIONS_M,
+        _h_rotation_angle,
+        _resolve_height,
+        angle_wrap,
+        build_towed_by,
+        load_alignment,
+        parse_openlabel,
     )
     _, H, _ = load_alignment(args.calibration, args.georef_data, None)
     if H is None:

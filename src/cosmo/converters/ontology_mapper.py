@@ -16,7 +16,6 @@ from typing import Optional
 
 try:
     import rdflib
-    from rdflib import Graph
     from rdflib.namespace import RDFS
     _RDFLIB = True
 except ImportError:
