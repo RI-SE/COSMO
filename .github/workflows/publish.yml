@@ -5,6 +5,9 @@ on:
     tags:
       - "v*"        # triggers on version tags, e.g. v0.1.0
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
 
   build:

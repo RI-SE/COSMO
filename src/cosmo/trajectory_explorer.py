@@ -126,6 +126,17 @@ def _update_parent_state(parent: QtWidgets.QTreeWidgetItem) -> None:
         parent.setCheckState(0, _PARTIAL)
 
 
+def _fmt_dims(dims: tuple[float, float, float] | None) -> str:
+    """Format (L, W, H) as a compact string for tree labels. Returns '' if dims is None."""
+    if dims is None:
+        return ""
+    parts = []
+    for v, label in zip(dims, ("L", "W", "H")):
+        if not math.isnan(v):
+            parts.append(f"{label}{v:.2f}")
+    return f"  [{' '.join(parts)}]" if parts else ""
+
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -1319,16 +1330,25 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         for type_name in sorted(self._type_subtype_objs):
             sub_dict = self._type_subtype_objs[type_name]
             total = sum(len(ids) for ids in sub_dict.values())
-            type_item = QtWidgets.QTreeWidgetItem(self._tree, [f"{type_name}  ({total})"])
+            # Compute mean dims across all objects in this type
+            type_dims = self._mean_dims_for_oids(
+                [oid for ids in sub_dict.values() for oid in ids])
+            type_label = f"{type_name}  ({total}){_fmt_dims(type_dims)}"
+            type_item = QtWidgets.QTreeWidgetItem(self._tree, [type_label])
             type_item.setCheckState(0, _CHECKED)
             for subtype_name in sorted(sub_dict):
                 obj_ids = sub_dict[subtype_name]
-                sub_item = QtWidgets.QTreeWidgetItem(type_item, [f"{subtype_name}  ({len(obj_ids)})"])
+                sub_dims = self._mean_dims_for_oids(obj_ids)
+                sub_label = f"{subtype_name}  ({len(obj_ids)}){_fmt_dims(sub_dims)}"
+                sub_item = QtWidgets.QTreeWidgetItem(type_item, [sub_label])
                 sub_item.setCheckState(0, _CHECKED)
                 for oid in obj_ids:
                     label = str(oid)
                     if oid in self._frameless_oids:
                         label += "  ∅"
+                    else:
+                        obj_dims = self._mean_dims_for_oids([oid])
+                        label += _fmt_dims(obj_dims)
                     leaf = QtWidgets.QTreeWidgetItem(sub_item, [label])
                     leaf.setCheckState(0, _CHECKED)
                     color = self._obj_colors.get(oid, QtGui.QColor(200, 200, 200))
@@ -1356,6 +1376,36 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
                 sub_item.setExpanded(True)
             type_item.setExpanded(True)
         self._tree.blockSignals(False)
+
+    def _mean_dims_for_oids(self, oids: list[int]) -> tuple[float, float, float] | None:
+        """Return (mean_L, mean_W, mean_H) across all frames for the given object ids, or None."""
+        Ls, Ws, Hs = [], [], []
+        for oid in oids:
+            obj = (self._trajs_a.get(oid) or self._trajs_b.get(oid)
+                   or self._trajs_c.get(oid))
+            if obj is None:
+                continue
+            df = obj.get("df")
+            if df is None or len(df) == 0:
+                continue
+            if "length" in df.columns:
+                vals = df["length"].dropna()
+                if len(vals):
+                    Ls.append(float(vals.mean()))
+            if "width" in df.columns:
+                vals = df["width"].dropna()
+                if len(vals):
+                    Ws.append(float(vals.mean()))
+            if "height" in df.columns:
+                vals = df["height"].dropna()
+                if len(vals):
+                    Hs.append(float(vals.mean()))
+        if not Ls and not Ws and not Hs:
+            return None
+        L = float(np.mean(Ls)) if Ls else float("nan")
+        W = float(np.mean(Ws)) if Ws else float("nan")
+        H = float(np.mean(Hs)) if Hs else float("nan")
+        return (L, W, H)
 
     def _on_item_changed(self, item, col):
         if col != 0:

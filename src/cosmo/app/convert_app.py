@@ -51,6 +51,7 @@ class ConvertConfig:
     bbox_correction: str = "none"   # "none" | "analytical" | "3d"
     camera_model: str = "mavic3pro-standard"
     hfov_deg: Optional[float] = None
+    use_gps_cam_pos: bool = False
 
     # size stabilization
     stabilize_size: bool = False
@@ -231,7 +232,8 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
                     with open(georef_path, encoding="utf-8") as _f:
                         proj_string = _json.load(_f).get("proj_string")
                 corrector = BboxCorrector(cam, H_corr, mode=cfg.bbox_correction,
-                                          proj_string=proj_string)
+                                          proj_string=proj_string,
+                                          use_gps_cam_pos=cfg.use_gps_cam_pos)
                 if log_fn:
                     log_fn(f"[COSMO] Oblique correction: mode={cfg.bbox_correction}, "
                            f"height={cam.drone_height:.1f}m, el={cam.elevation_angle_deg:.1f}° from nadir")

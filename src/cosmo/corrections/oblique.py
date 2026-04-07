@@ -120,7 +120,7 @@ class BboxCorrector:
     """Correct oblique-drone bboxes for height-induced position bias and dimension inflation."""
 
     def __init__(self, camera: DroneCamera, H: np.ndarray, mode: str = "analytical",
-                 proj_string: str | None = None):
+                 proj_string: str | None = None, use_gps_cam_pos: bool = False):
         self.camera = camera
         self.H = H
         if mode == "3d":
@@ -134,15 +134,16 @@ class BboxCorrector:
             self.mode = "analytical"
         self._H_inv = np.linalg.inv(H)
         self._nadir_xy = np.array(_apply_homography(H, camera.image_width / 2, camera.image_height / 2))
-        self._K_inv = np.linalg.inv(camera.K)
 
-        # Camera position: prefer GPS, fall back to H-derived
+        # Camera position: H-derived is geometrically consistent with the calibrated H.
+        # GPS (drone body position) can be 10–20m off from the optical centre and introduces bias.
+        # Use GPS only when explicitly requested.
+        h_pos = camera.camera_world_pos(self._nadir_xy)
+
         gps_pos = None
-        if camera.drone_lat is not None and proj_string:
+        if use_gps_cam_pos and camera.drone_lat is not None and proj_string:
             gps_pos = _cam_pos_from_gps(camera.drone_lat, camera.drone_lon,
                                          camera.drone_height, proj_string)
-
-        h_pos = camera.camera_world_pos(self._nadir_xy)
 
         if gps_pos is not None:
             dist = np.linalg.norm(gps_pos[:2] - h_pos[:2])
@@ -150,23 +151,8 @@ class BboxCorrector:
                      gps_pos[0], gps_pos[1], h_pos[0], h_pos[1], dist)
             self._cam_pos = gps_pos
         else:
+            log.info("cam_pos H-derived=(%.1f,%.1f,%.1f)", h_pos[0], h_pos[1], h_pos[2])
             self._cam_pos = h_pos
-
-        self._R_cam_to_world = camera.rotation_matrix().T  # cached; R is world-to-cam
-
-    def _pixel_to_plane(self, u: float, v: float, z_plane: float) -> tuple[float, float] | None:
-        """Ray-cast pixel (u, v) to a horizontal world plane at z=z_plane."""
-        ray_world = self._R_cam_to_world @ (self._K_inv @ np.array([u, v, 1.0], dtype=np.float64))
-        dz = ray_world[2]
-        if abs(dz) < 1e-10:
-            return None
-        t = (z_plane - self._cam_pos[2]) / dz
-        if t <= 0:
-            return None
-        return (
-            float(self._cam_pos[0] + t * ray_world[0]),
-            float(self._cam_pos[1] + t * ray_world[1]),
-        )
 
     def correct(
         self,
@@ -206,20 +192,23 @@ class BboxCorrector:
         X_raw, Y_raw = _apply_homography(self.H, cx, cy)
 
         # For each corner, check whether it is on the opposite side of the car from the camera.
-        # We use the dot product of the corner's world offset (from car centre) with the camera's
-        # world offset; a negative dot means they point in opposite directions → far corner.
-        # Far corners have the roof edge as the silhouette boundary (z=h_veh); near corners have
-        # the tyre (z=0), for which the H-map is already correct.
-        # Using world-frame dot product works for any car heading relative to the camera.
+        # A negative dot product means corner and camera point in opposite directions from center → far corner.
+        # Far corners have the roof edge as the silhouette boundary (z=h_veh); near corners
+        # have the tyre (z=0), for which the H-map is already correct.
         cos_h, sin_h = np.cos(-heading_rad), np.sin(-heading_rad)
         cam_dx = self._cam_pos[0] - X_raw
         cam_dy = self._cam_pos[1] - Y_raw
 
+        # H-consistent shadow reverse for far corners:
+        # H maps the roofline pixel to the ground "shadow" (extending beyond the footprint).
+        # The true footprint edge is: cam + (shadow - cam) × (H_drone - h_veh) / H_drone
+        roof_scale = (self.camera.drone_height - h_veh) / self.camera.drone_height
         for i, ((u, v), (wx, wy)) in enumerate(zip(corners_px, corners_world)):
             if (wx - X_raw) * cam_dx + (wy - Y_raw) * cam_dy < 0:  # far corner → roof
-                p = self._pixel_to_plane(u, v, h_veh)
-                if p is not None:
-                    corners_world[i] = p
+                corners_world[i] = (
+                    self._cam_pos[0] + (wx - self._cam_pos[0]) * roof_scale,
+                    self._cam_pos[1] + (wy - self._cam_pos[1]) * roof_scale,
+                )
 
         X_corr = sum(x for x, y in corners_world) / 4
         Y_corr = sum(y for x, y in corners_world) / 4

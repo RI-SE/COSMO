@@ -47,6 +47,14 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--hfov-deg", type=float, default=None, metavar="FLOAT",
                     help="Override horizontal FOV in degrees")
     ap.add_argument(
+        "--use-gps-cam-pos", action="store_true",
+        help=(
+            "Use GPS drone position as the camera world position instead of the H-derived position. "
+            "GPS measures the drone body, not the gimbal optical centre, and may be 10–20 m off; "
+            "H-derived is geometrically consistent with the calibrated homography (default)."
+        ),
+    )
+    ap.add_argument(
         "--output-coords", choices=["pixel", "geo", "both"], default="pixel",
         help=(
             "Output coordinate format. "
@@ -189,7 +197,8 @@ def main(argv=None) -> int:
         args.flight_record, args.flight_record_sequence,
         args.camera_model, args.hfov_deg,
     )
-    corrector = BboxCorrector(cam, H, mode=args.correction, proj_string=proj_string)
+    corrector = BboxCorrector(cam, H, mode=args.correction, proj_string=proj_string,
+                              use_gps_cam_pos=args.use_gps_cam_pos)
 
     # For geo output: add coordinate_systems to root
     root = ol.get("openlabel", ol)

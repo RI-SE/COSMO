@@ -118,6 +118,11 @@ Examples:
                     help="Camera model key for HFOV/resolution lookup (default: mavic3pro-standard)")
     ob.add_argument("--hfov-deg", type=float, default=None, metavar="FLOAT",
                     help="Override horizontal FOV in degrees")
+    ob.add_argument("--use-gps-cam-pos", action="store_true",
+                    help=(
+                        "Use GPS drone position as camera position instead of H-derived (default). "
+                        "H-derived is geometrically consistent with the calibrated homography."
+                    ))
 
     # Size stabilization
     ap.add_argument("--stabilize-size", action="store_true",
@@ -177,6 +182,7 @@ def main(argv=None) -> int:
         bbox_correction=args.bbox_correction,
         camera_model=args.camera_model,
         hfov_deg=args.hfov_deg,
+        use_gps_cam_pos=args.use_gps_cam_pos,
         out_dir=args.out_dir,
         run_name=args.run_name,
         stabilize_size=args.stabilize_size,
