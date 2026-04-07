@@ -134,6 +134,7 @@ class BboxCorrector:
             self.mode = "analytical"
         self._H_inv = np.linalg.inv(H)
         self._nadir_xy = np.array(_apply_homography(H, camera.image_width / 2, camera.image_height / 2))
+        self._K_inv = np.linalg.inv(camera.K)
 
         # Camera position: prefer GPS, fall back to H-derived
         gps_pos = None
@@ -150,6 +151,22 @@ class BboxCorrector:
             self._cam_pos = gps_pos
         else:
             self._cam_pos = h_pos
+
+        self._R_cam_to_world = camera.rotation_matrix().T  # cached; R is world-to-cam
+
+    def _pixel_to_plane(self, u: float, v: float, z_plane: float) -> tuple[float, float] | None:
+        """Ray-cast pixel (u, v) to a horizontal world plane at z=z_plane."""
+        ray_world = self._R_cam_to_world @ (self._K_inv @ np.array([u, v, 1.0], dtype=np.float64))
+        dz = ray_world[2]
+        if abs(dz) < 1e-10:
+            return None
+        t = (z_plane - self._cam_pos[2]) / dz
+        if t <= 0:
+            return None
+        return (
+            float(self._cam_pos[0] + t * ray_world[0]),
+            float(self._cam_pos[1] + t * ray_world[1]),
+        )
 
     def correct(
         self,
@@ -174,51 +191,46 @@ class BboxCorrector:
         heading_rad: float,
         h_veh_override: float | None = None,
     ) -> CorrectionResult:
-        H = self.H
-        # 1. Map rbbox corners to ground
+        h_veh = (h_veh_override if h_veh_override is not None
+                 else DEFAULT_VEHICLE_HEIGHTS.get(label_type.lower(), DEFAULT_VEHICLE_HEIGHTS["other"]))
+
+        # Map all 4 rbbox corners to ground (z=0) via H.
+        # For the near-side corners this is correct: the annotation boundary is the tyre at z=0.
         cos_a, sin_a = np.cos(yaw_img), np.sin(yaw_img)
         hw, hh = w_px / 2, h_px / 2
         corners_px = [
             (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
             for dx, dy in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh))
         ]
-        corners_world = [_apply_homography(H, u, v) for u, v in corners_px]
+        corners_world = [_apply_homography(self.H, u, v) for u, v in corners_px]
+        X_raw, Y_raw = _apply_homography(self.H, cx, cy)
 
-        # 2. Raw vehicle center via H
-        X_raw, Y_raw = _apply_homography(H, cx, cy)
-
-        # 3. Project corners to vehicle axis frame to get observed dims
+        # For each corner, check whether it is on the opposite side of the car from the camera.
+        # We use the dot product of the corner's world offset (from car centre) with the camera's
+        # world offset; a negative dot means they point in opposite directions → far corner.
+        # Far corners have the roof edge as the silhouette boundary (z=h_veh); near corners have
+        # the tyre (z=0), for which the H-map is already correct.
+        # Using world-frame dot product works for any car heading relative to the camera.
         cos_h, sin_h = np.cos(-heading_rad), np.sin(-heading_rad)
+        cam_dx = self._cam_pos[0] - X_raw
+        cam_dy = self._cam_pos[1] - Y_raw
+
+        for i, ((u, v), (wx, wy)) in enumerate(zip(corners_px, corners_world)):
+            if (wx - X_raw) * cam_dx + (wy - Y_raw) * cam_dy < 0:  # far corner → roof
+                p = self._pixel_to_plane(u, v, h_veh)
+                if p is not None:
+                    corners_world[i] = p
+
+        X_corr = sum(x for x, y in corners_world) / 4
+        Y_corr = sum(y for x, y in corners_world) / 4
         veh_xs = [x * cos_h - y * sin_h for x, y in corners_world]
         veh_ys = [x * sin_h + y * cos_h for x, y in corners_world]
-        L_obs = max(veh_xs) - min(veh_xs)
-        W_obs = max(veh_ys) - min(veh_ys)
-
-        # 4. Elevation angle from nadir to vehicle (at the camera's horizontal distance)
-        dx = X_raw - self._cam_pos[0]
-        dy = Y_raw - self._cam_pos[1]
-        R_h = np.hypot(dx, dy)
-        theta = np.arctan2(R_h, self.camera.drone_height)  # angle from nadir
-
-        # 5. Angle of camera-to-vehicle direction relative to vehicle heading
-        cam_to_veh_vx = dx * cos_h - dy * sin_h   # in vehicle frame
-        cam_to_veh_vy = dx * sin_h + dy * cos_h
-        alpha = np.arctan2(cam_to_veh_vy, cam_to_veh_vx)
-
-        # 6. Height-induced projection inflation
-        h_veh = h_veh_override if h_veh_override is not None else DEFAULT_VEHICLE_HEIGHTS.get(label_type.lower(), DEFAULT_VEHICLE_HEIGHTS["other"])
-        correction = h_veh * np.tan(theta)
-        L_corr = max(L_obs - correction * abs(np.cos(alpha)), _MIN_LENGTH)
-        W_corr = max(W_obs - correction * abs(np.sin(alpha)), _MIN_WIDTH)
-
-        # 7. Center shift: roof center is displaced toward camera by h_veh/2 / H_drone
-        scale = (h_veh / 2) / self.camera.drone_height
-        X_corr = X_raw - dx * scale
-        Y_corr = Y_raw - dy * scale
 
         return CorrectionResult(
             x=X_corr, y=Y_corr, z=0.0,
-            length=L_corr, width=W_corr, height=h_veh,
+            length=max(max(veh_xs) - min(veh_xs), _MIN_LENGTH),
+            width=max(max(veh_ys) - min(veh_ys), _MIN_WIDTH),
+            height=h_veh,
             method="analytical",
         )
 
