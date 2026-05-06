@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -67,6 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--stabilize-size", action="store_true",
         help="Replace per-frame dimensions with per-object average; add size_mean/size_std/size_deviation fields.",
     )
+
+    # Provenance
+    prov = ap.add_argument_group("provenance")
+    prov.add_argument("--prov-out", metavar="PATH", help="Write W3C-PROV provenance to this file (omit to skip)")
+    prov.add_argument("--prov-in", metavar="PATH", help="Continue an existing upstream provenance chain (optional)")
+
     return ap
 
 
@@ -153,6 +161,56 @@ def _read_proj_string(georef_data_path: str | None) -> str | None:
             return json.load(f).get("proj_string")
     except Exception:
         return None
+
+
+def _record_provenance_correct(
+    args, input_path: str, out_path: Path, start_time: datetime, end_time: datetime,
+) -> None:
+    """Record a dataprov provenance step for cosmo-correct."""
+    try:
+        from importlib.metadata import version as _pkg_version
+        tool_version = _pkg_version("cosmo")
+    except Exception:
+        tool_version = "unknown"
+
+    from dataprov import ProvenanceChain
+
+    prov_in = args.prov_in
+    if prov_in and Path(prov_in).exists():
+        chain = ProvenanceChain.load(prov_in)
+    else:
+        chain = ProvenanceChain.create(
+            entity_id=f"correct:{Path(input_path).stem}",
+            initial_source=input_path,
+            description=f"Oblique bbox correction of {Path(input_path).name}",
+        )
+
+    inputs = [input_path, args.flight_record]
+    input_formats = ["json", "json"]
+    if args.georef_data:
+        inputs.append(args.georef_data)
+        input_formats.append("json")
+    if args.calibration:
+        inputs.append(args.calibration)
+        input_formats.append("json")
+
+    chain.add(
+        tool_name="cosmo-correct",
+        tool_version=tool_version,
+        operation="correct",
+        inputs=inputs,
+        input_formats=input_formats,
+        outputs=[str(out_path)],
+        output_formats=["json"],
+        arguments=" ".join(sys.argv),
+        started_at=start_time.isoformat().replace("+00:00", "Z"),
+        ended_at=end_time.isoformat().replace("+00:00", "Z"),
+        input_provenance_files=[prov_in] if prov_in else None,
+        capture_agent=True,
+        capture_environment=True,
+    )
+    chain.save(args.prov_out)
+    print(f"Provenance: {args.prov_out}")
 
 
 def main(argv=None) -> int:
@@ -251,6 +309,7 @@ def main(argv=None) -> int:
         px_std = {oid: tuple(np.array(v).std(axis=0).tolist()) for oid, v in px_sizes.items()}
 
     n_corrected = 0
+    start_time = datetime.now(timezone.utc)
     for i, (fkey, fval) in enumerate(frame_items):
         if i % 200 == 0:
             print(f"  Processing {i}/{n_frames} frames...", flush=True)
@@ -342,12 +401,17 @@ def main(argv=None) -> int:
                 vec_list.append({"name": "size_std_geo", "val": list(geo_std[oid])})
 
     # Write output
+    end_time = datetime.now(timezone.utc)
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(ol, f, indent=2, ensure_ascii=False)
 
     print(f"Corrected {n_corrected} bboxes ({args.correction}/{output_coords}) → {out_path}")
+
+    if args.prov_out:
+        _record_provenance_correct(args, input_path, out_path, start_time, end_time)
+
     return 0
 
 

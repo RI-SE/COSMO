@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Tuple
 
@@ -134,6 +136,11 @@ Examples:
     # Output formatting
     ap.add_argument("--json", action="store_true", help="Print result as JSON")
 
+    # Provenance
+    prov = ap.add_argument_group("provenance")
+    prov.add_argument("--prov-out", metavar="PATH", help="Write W3C-PROV provenance to this file (omit to skip)")
+    prov.add_argument("--prov-in", metavar="PATH", help="Continue an existing upstream provenance chain (optional)")
+
     return ap
 
 
@@ -155,6 +162,66 @@ def _resolve_openlabel(args: argparse.Namespace, ap: argparse.ArgumentParser) ->
     except argparse.ArgumentTypeError as e:
         ap.error(str(e))
         raise
+
+
+def _record_provenance_convert(args, openlabel: str, result, start_time: datetime, end_time: datetime) -> None:
+    """Record a dataprov provenance step for cosmo-convert."""
+    try:
+        from importlib.metadata import version as _pkg_version
+        tool_version = _pkg_version("cosmo")
+    except Exception:
+        tool_version = "unknown"
+
+    from dataprov import ProvenanceChain
+
+    prov_in = args.prov_in
+    if prov_in and Path(prov_in).exists():
+        chain = ProvenanceChain.load(prov_in)
+    else:
+        chain = ProvenanceChain.create(
+            entity_id=f"convert:{Path(openlabel).stem}",
+            initial_source=openlabel,
+            description=f"Conversion of {Path(openlabel).name} to Omega-Prime",
+        )
+
+    inputs = [openlabel]
+    input_formats = ["json"]
+    for path, fmt in [
+        (args.opendrive, "xodr"),
+        (args.georef_data, "json"),
+        (args.calibration, "json"),
+        (args.flight_record, "json"),
+    ]:
+        if path:
+            inputs.append(path)
+            input_formats.append(fmt)
+
+    outputs: list[str] = []
+    output_formats: list[str] = []
+    if result.csv_path:
+        outputs.append(str(result.csv_path))
+        output_formats.append("csv")
+    if result.mcap_path:
+        outputs.append(str(result.mcap_path))
+        output_formats.append("mcap")
+
+    chain.add(
+        tool_name="cosmo-convert",
+        tool_version=tool_version,
+        operation="convert",
+        inputs=inputs,
+        input_formats=input_formats,
+        outputs=outputs,
+        output_formats=output_formats,
+        arguments=" ".join(sys.argv),
+        started_at=start_time.isoformat().replace("+00:00", "Z"),
+        ended_at=end_time.isoformat().replace("+00:00", "Z"),
+        input_provenance_files=[prov_in] if prov_in else None,
+        capture_agent=True,
+        capture_environment=True,
+    )
+    chain.save(args.prov_out)
+    print(f"Provenance: {args.prov_out}")
 
 
 def main(argv=None) -> int:
@@ -191,7 +258,9 @@ def main(argv=None) -> int:
     def _log(line: str) -> None:
         print(line, flush=True)
 
+    start_time = datetime.now(timezone.utc)
     result = run_convert(cfg, log_fn=_log)
+    end_time = datetime.now(timezone.utc)
 
     if args.json:
         print(json.dumps(asdict(result), indent=2))
@@ -206,6 +275,9 @@ def main(argv=None) -> int:
             print("Notes:")
             for n in result.notes:
                 print(f" - {n}")
+
+    if args.prov_out:
+        _record_provenance_convert(args, openlabel, result, start_time, end_time)
 
     return 0
 
