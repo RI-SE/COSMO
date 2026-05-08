@@ -27,6 +27,11 @@ DEFAULT_VEHICLE_HEIGHTS: dict[str, float] = {
 _MIN_LENGTH = 0.5
 _MIN_WIDTH = 0.3
 
+# Skip L-BFGS-B when the analytical result's reprojection loss is already below this.
+# Loss units: 2*(Δcx² + Δcy²) + Δw² + Δh²  (pixels²).
+# A value of 1.0 means center within ~0.7 px and dims within ~1 px — no optimizer gain.
+_3D_SKIP_THRESHOLD = 1.0
+
 
 @dataclass
 class CorrectionResult:
@@ -49,15 +54,12 @@ def _apply_homography(H: np.ndarray, u: float, v: float) -> tuple[float, float]:
 def _box3d_corners(cx: float, cy: float, L: float, W: float, H_veh: float, heading: float) -> np.ndarray:
     """Return the 8 world-space corners of a 3D box (base on ground plane)."""
     cos_h, sin_h = np.cos(heading), np.sin(heading)
-    corners = []
-    for sl in (-1.0, 1.0):
-        for sw in (-1.0, 1.0):
-            for sz in (0.0, 1.0):
-                wx = cx + sl * (L / 2) * cos_h - sw * (W / 2) * sin_h
-                wy = cy + sl * (L / 2) * sin_h + sw * (W / 2) * cos_h
-                wz = sz * H_veh
-                corners.append([wx, wy, wz])
-    return np.array(corners, dtype=np.float64)
+    sl = np.array([-1., -1., -1., -1.,  1.,  1.,  1.,  1.])
+    sw = np.array([-1., -1.,  1.,  1., -1., -1.,  1.,  1.])
+    sz = np.array([ 0.,  1.,  0.,  1.,  0.,  1.,  0.,  1.])
+    wx = cx + sl * (L / 2) * cos_h - sw * (W / 2) * sin_h
+    wy = cy + sl * (L / 2) * sin_h + sw * (W / 2) * cos_h
+    return np.column_stack([wx, wy, sz * H_veh])
 
 
 def _cam_pos_from_gps(lat: float, lon: float, drone_height: float, proj_string: str) -> np.ndarray | None:
@@ -117,20 +119,18 @@ def _project_box_via_h(
     heading_rad: float, H_inv: np.ndarray, cam_pos: np.ndarray,
 ) -> np.ndarray | None:
     """Project 3D box to image via ground-shadow + H^{-1}."""
-    corners = _box3d_corners(cx3d, cy3d, L, W, h_veh, heading_rad)
+    corners = _box3d_corners(cx3d, cy3d, L, W, h_veh, heading_rad)  # (8, 3)
     cz = cam_pos[2]
-    pts = []
-    for wx, wy, wz in corners:
-        if wz >= cz:
-            return None
-        scale = cz / (cz - wz)
-        xg = cam_pos[0] + (wx - cam_pos[0]) * scale
-        yg = cam_pos[1] + (wy - cam_pos[1]) * scale
-        q = H_inv @ np.array([xg, yg, 1.0])
-        if abs(q[2]) < 1e-12:
-            return None
-        pts.append([q[0] / q[2], q[1] / q[2]])
-    return np.array(pts)
+    if np.any(corners[:, 2] >= cz):
+        return None
+    scale = cz / (cz - corners[:, 2])                                # (8,)
+    xg = cam_pos[0] + (corners[:, 0] - cam_pos[0]) * scale
+    yg = cam_pos[1] + (corners[:, 1] - cam_pos[1]) * scale
+    q = np.column_stack([xg, yg, np.ones(8)]) @ H_inv.T              # (8, 3)
+    denom = q[:, 2]
+    if np.any(np.abs(denom) < 1e-12):
+        return None
+    return q[:, :2] / denom[:, np.newaxis]
 
 
 def _project_box_full_P(
@@ -138,14 +138,12 @@ def _project_box_full_P(
     heading_rad: float, P: np.ndarray,
 ) -> np.ndarray | None:
     """Project 3D box corners to image using the full 3×4 projection matrix P."""
-    corners = _box3d_corners(cx3d, cy3d, L, W, h_veh, heading_rad)
-    pts = []
-    for wx, wy, wz in corners:
-        q = P @ np.array([wx, wy, wz, 1.0])
-        if abs(q[2]) < 1e-12 or q[2] < 0:
-            return None
-        pts.append([q[0] / q[2], q[1] / q[2]])
-    return np.array(pts)
+    corners = _box3d_corners(cx3d, cy3d, L, W, h_veh, heading_rad)   # (8, 3)
+    q = np.column_stack([corners, np.ones(8)]) @ P.T                  # (8, 3)
+    denom = q[:, 2]
+    if np.any((np.abs(denom) < 1e-12) | (denom < 0)):
+        return None
+    return q[:, :2] / denom[:, np.newaxis]
 
 
 def _projected_bbox(pts_img: np.ndarray, yaw_img: float) -> tuple[float, float, float, float]:
@@ -303,6 +301,14 @@ class BboxCorrector:
         L0, W0 = initial.length, initial.width
         obs = (cx, cy, w_px, h_px, yaw_img)
 
+        # Early-exit: skip optimizer when analytical is already close enough.
+        initial_loss = _fit_loss(np.array([0.0, 0.0, L0, W0]),
+                                 x0, y0, self._H_inv, self._cam_pos, heading_rad, h_veh, obs)
+        if initial_loss < _3D_SKIP_THRESHOLD:
+            return CorrectionResult(x=initial.x, y=initial.y, z=0.0,
+                                    length=initial.length, width=initial.width, height=h_veh,
+                                    method="analytical")
+
         # Bounds: dX/dY within ±5m, L/W within [0.5×, 2.5×] of analytical result
         bounds = [(-5.0, 5.0), (-5.0, 5.0), (max(0.3, L0 * 0.5), L0 * 2.5), (max(0.2, W0 * 0.5), W0 * 2.0)]
 
@@ -312,7 +318,7 @@ class BboxCorrector:
             args=(x0, y0, self._H_inv, self._cam_pos, heading_rad, h_veh, obs),
             method="L-BFGS-B",
             bounds=bounds,
-            options={"maxiter": 100, "ftol": 1e-6},
+            options={"maxiter": 50, "ftol": 1e-4},
         )
 
         if result.success or result.fun < 1e4:
