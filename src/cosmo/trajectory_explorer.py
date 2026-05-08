@@ -61,6 +61,9 @@ def _dash_dot_line():
     return QtCore.Qt.DashDotLine
 
 
+# Signal compat (PyQt5/6 vs PySide6)
+_Sig = getattr(QtCore, "pyqtSignal", None) or QtCore.Signal
+
 # Qt CheckState constants (compat)
 _Qt = QtCore.Qt
 _CHECKED = _Qt.CheckState.Checked if hasattr(_Qt, "CheckState") else _Qt.Checked
@@ -643,6 +646,94 @@ def load_from_openlabel(path: str, fps: float | None = None) -> dict[int, dict]:
     return result
 
 
+def _openlabel_needs_fps(path: str) -> bool:
+    """Return True if this OpenLabel file has no timestamps and requires an fps hint."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    root = data.get("openlabel", data)
+    return not any(
+        fd.get("frame_properties", {}).get("timestamp")
+        for fd in root.get("frames", {}).values()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Background loader
+# ---------------------------------------------------------------------------
+
+class _LoadWorker(QtCore.QThread):
+    """Loads trajectory files and XODR on a background thread."""
+    progress = _Sig(str)
+    done = _Sig(object)
+    failed = _Sig(str)
+
+    def __init__(self, xodr_path: str, paths: dict, fps: dict):
+        super().__init__()
+        self._xodr_path = xodr_path
+        self._paths = paths   # {'a': path|None, 'b': path|None, 'c': path|None}
+        self._fps = fps       # {'a': float, ...} for OpenLabel without timestamps
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        result: dict = {"trajs_a": {}, "trajs_b": {}, "trajs_c": {}, "roads": [], "parking": []}
+        xodr_xmls: list = []
+        try:
+            for slot in ("a", "b", "c"):
+                if self._cancelled:
+                    return
+                path = self._paths.get(slot)
+                if not path:
+                    continue
+                self.progress.emit(f"Loading {slot.upper()}: {Path(path).name}…")
+                ext = Path(path).suffix.lower()
+                try:
+                    if ext == ".csv":
+                        trajs = load_trajectories_full(path)
+                    elif ext == ".mcap":
+                        xodr_xml, trajs = load_from_mcap(path)
+                        if xodr_xml:
+                            xodr_xmls.append(xodr_xml)
+                    elif ext == ".json":
+                        trajs = load_from_openlabel(path, fps=self._fps.get(slot))
+                    else:
+                        self.failed.emit(f"Unsupported file type: {path}")
+                        return
+                except Exception as exc:
+                    self.failed.emit(f"Could not load {Path(path).name}: {exc}")
+                    return
+                result[f"trajs_{slot}"] = trajs
+
+            if self._cancelled:
+                return
+
+            if self._xodr_path:
+                self.progress.emit(f"Parsing map: {Path(self._xodr_path).name}…")
+                try:
+                    roads, parking, _ = parse_xodr(self._xodr_path)
+                except Exception as exc:
+                    self.failed.emit(f"Could not load XODR: {exc}")
+                    return
+            elif xodr_xmls:
+                self.progress.emit("Parsing embedded map…")
+                try:
+                    roads, parking, _ = parse_xodr_text(xodr_xmls[0])
+                except Exception as exc:
+                    print(f"Warning: could not parse embedded XODR: {exc}")
+                    roads, parking = [], []
+            else:
+                roads, parking = [], []
+
+            result["roads"] = roads
+            result["parking"] = parking
+            if not self._cancelled:
+                self.done.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Scene building helpers
 # ---------------------------------------------------------------------------
@@ -750,7 +841,8 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
     def __init__(self, xodr_path: str | None = None, slot_a: str | None = None,
                  slot_b: str | None = None, slot_c: str | None = None,
-                 smooth_window: int = 5, smooth_sigma: float | None = None):
+                 smooth_window: int = 5, smooth_sigma: float | None = None,
+                 live_table: bool = True):
         super().__init__()
         self._xodr_path = xodr_path or ""
         self._slot_path_a: str | None = slot_a or None
@@ -758,6 +850,8 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._slot_path_c: str | None = slot_c or None
         self._smooth_window = smooth_window
         self._smooth_sigma = smooth_sigma if smooth_sigma is not None else smooth_window / 2
+        self._live_table = live_table
+        self._load_worker: QtCore.QThread | None = None
         self.setWindowTitle("Trajectory Explorer")
         self.resize(1400, 900)
 
@@ -1027,6 +1121,16 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def _reload(self):
+        # Cancel any in-flight load
+        if self._load_worker is not None and self._load_worker.isRunning():
+            try:
+                self._load_worker.cancel()
+                self._load_worker.done.disconnect()
+                self._load_worker.failed.disconnect()
+                self._load_worker.progress.disconnect()
+            except Exception:
+                pass
+
         self._play_timer.stop()
         self._btn_play.setText("▶")
         self.scene.clear()
@@ -1041,46 +1145,72 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._slider.setRange(0, 0)
         self._lbl_frame.setText("frame 0/0  t=0.0s")
         self._data_table.setRowCount(0)
-
-        xodr_xml_a = xodr_xml_b = xodr_xml_c = None
         self._trajs_a, self._trajs_b, self._trajs_c = {}, {}, {}
 
-        for attr, path in [
-            ("_trajs_a", self._slot_path_a),
-            ("_trajs_b", self._slot_path_b),
-            ("_trajs_c", self._slot_path_c),
-        ]:
-            if not path:
+        if not any([self._slot_path_a, self._slot_path_b, self._slot_path_c, self._xodr_path]):
+            return
+
+        # Ask for FPS upfront for any OpenLabel files that need it (must be on main thread)
+        fps_by_slot: dict = {}
+        for slot in ("a", "b", "c"):
+            path = getattr(self, f"_slot_path_{slot}")
+            if not path or Path(path).suffix.lower() != ".json":
                 continue
             try:
-                xodr_xml, trajs = self._load_slot(path)
-                setattr(self, attr, trajs)
-                if attr == "_trajs_a":
-                    xodr_xml_a = xodr_xml
-                elif attr == "_trajs_b":
-                    xodr_xml_b = xodr_xml
-                else:
-                    xodr_xml_c = xodr_xml
-            except Exception as exc:
-                print(f"Warning: could not load {path}: {exc}")
+                if _openlabel_needs_fps(path):
+                    fps, ok = QtWidgets.QInputDialog.getDouble(
+                        self, "OpenLabel FPS", "Frames per second:", 30.0, 0.1, 1000.0, 2
+                    )
+                    if not ok:
+                        return
+                    fps_by_slot[slot] = fps
+            except Exception:
+                pass
 
-        roads, parking = [], []
-        if self._xodr_path:
-            try:
-                roads, parking, _ = parse_xodr(self._xodr_path)
-            except Exception as exc:
-                self.scene.addText(f"Error loading XODR: {exc}")
-                return
-        else:
-            for xodr_xml in [xodr_xml_a, xodr_xml_b, xodr_xml_c]:
-                if xodr_xml:
-                    try:
-                        roads, parking, _ = parse_xodr_text(xodr_xml)
-                    except Exception as exc:
-                        print(f"Warning: could not parse embedded XODR: {exc}")
-                    break
+        self._load_worker = _LoadWorker(
+            xodr_path=self._xodr_path,
+            paths={"a": self._slot_path_a, "b": self._slot_path_b, "c": self._slot_path_c},
+            fps=fps_by_slot,
+        )
+        self._load_worker.progress.connect(self._on_load_progress)
+        self._load_worker.done.connect(self._on_load_done)
+        self._load_worker.failed.connect(self._on_load_failed)
 
-        self._rebuild_ui_and_scene(roads, parking)
+        _wm = (QtCore.Qt.WindowModality.WindowModal
+               if hasattr(QtCore.Qt, "WindowModality") else QtCore.Qt.WindowModal)
+        pd = QtWidgets.QProgressDialog("Starting…", "Cancel", 0, 0, self)
+        pd.setWindowTitle("Loading")
+        pd.setMinimumDuration(300)
+        pd.setAutoClose(False)
+        pd.setAutoReset(False)
+        pd.setWindowModality(_wm)
+        pd.canceled.connect(self._on_load_cancel)
+        self._progress_dlg = pd
+
+        self._load_worker.start()
+
+    def _on_load_progress(self, msg: str) -> None:
+        if hasattr(self, "_progress_dlg"):
+            self._progress_dlg.setLabelText(msg)
+
+    def _on_load_cancel(self) -> None:
+        if self._load_worker is not None:
+            self._load_worker.cancel()
+        if hasattr(self, "_progress_dlg"):
+            self._progress_dlg.close()
+
+    def _on_load_failed(self, msg: str) -> None:
+        if hasattr(self, "_progress_dlg"):
+            self._progress_dlg.close()
+        self.scene.addText(f"Error loading: {msg}")
+
+    def _on_load_done(self, result: dict) -> None:
+        if hasattr(self, "_progress_dlg"):
+            self._progress_dlg.close()
+        self._trajs_a = result["trajs_a"]
+        self._trajs_b = result["trajs_b"]
+        self._trajs_c = result["trajs_c"]
+        self._rebuild_ui_and_scene(result["roads"], result["parking"])
 
     def _rebuild_ui_and_scene(self, roads, parking) -> None:
         all_ids = set(self._trajs_a) | set(self._trajs_b) | set(self._trajs_c)
@@ -1228,7 +1358,8 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._update_rect_items(self._trajs_a, self._rect_items_a, nanos)
         self._update_rect_items(self._trajs_b, self._rect_items_b, nanos)
         self._update_rect_items(self._trajs_c, self._rect_items_c, nanos)
-        self._update_data_table(nanos)
+        if self._live_table or not self._play_timer.isActive():
+            self._update_data_table(nanos)
 
         total = len(self._all_nanos)
         t_s = (nanos - self._all_nanos[0]) / 1e9 if total > 1 else 0.0
@@ -1320,6 +1451,8 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         if self._play_timer.isActive():
             self._play_timer.stop()
             self._btn_play.setText("▶")
+            if not self._live_table and self._all_nanos:
+                self._update_data_table(self._all_nanos[self._frame_idx])
         else:
             if not self._all_nanos:
                 return
@@ -1344,6 +1477,8 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         if next_idx >= len(self._all_nanos):
             self._play_timer.stop()
             self._btn_play.setText("▶")
+            if not self._live_table:
+                self._update_data_table(self._all_nanos[self._frame_idx])
             return
         self._update_frame(next_idx)
 
@@ -1525,20 +1660,13 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
 
 
 def _build_full_timeline(nanos_set: set[int]) -> list[int]:
-    """Reconstruct a uniform frame grid from sparse CSV timestamps.
+    """Build the playback timeline from the union of all object timestamps.
 
-    CSV timestamps are round(k/fps * 1e9); infer fps from min gap and
-    regenerate the complete grid so empty frames are included.
+    Previously this reconstructed a uniform grid via fps inference, but that
+    introduced rounding mismatches vs. MCAP timestamps (floor-truncated) causing
+    ~50% of frames to appear empty. Using the actual timestamps is always correct.
     """
-    if len(nanos_set) < 2:
-        return sorted(nanos_set)
-    nanos_arr = np.array(sorted(nanos_set), dtype=np.int64)
-    diffs = np.diff(nanos_arr)
-    dt_nanos = int(np.min(diffs[diffs > 0]))
-    fps = round(1e9 / dt_nanos)
-    start_frame = round(int(nanos_arr[0]) * fps / 1e9)
-    end_frame = round(int(nanos_arr[-1]) * fps / 1e9)
-    return [int(round(k / fps * 1e9)) for k in range(start_frame, end_frame + 1)]
+    return sorted(nanos_set)
 
 def _build_obj_colors(all_ids: set[int]) -> dict[int, QtGui.QColor]:
     """Assign a palette color per unique object id."""
@@ -1577,12 +1705,15 @@ def main():
         help="Half-width of Gaussian smoothing window in frames (default: 5)")
     parser.add_argument("--smooth-sigma", type=float, default=None,
         help="Gaussian sigma in frames (default: smooth_window/2)")
+    parser.add_argument("--no-live-table", action="store_true", default=False,
+        help="Skip data table updates during playback (faster with many objects)")
     args = parser.parse_args()
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     win = TrajectoryExplorer(
         xodr_path=args.xodr, slot_a=args.slot_a, slot_b=args.slot_b, slot_c=args.slot_c,
         smooth_window=args.smooth_window, smooth_sigma=args.smooth_sigma,
+        live_table=not args.no_live_table,
     )
     win.show()
     try:
