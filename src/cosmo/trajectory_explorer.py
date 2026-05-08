@@ -1176,41 +1176,63 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._load_worker.done.connect(self._on_load_done)
         self._load_worker.failed.connect(self._on_load_failed)
 
+        # Simple status dialog — no progress bar, just label + cancel button
         _wm = (QtCore.Qt.WindowModality.WindowModal
                if hasattr(QtCore.Qt, "WindowModality") else QtCore.Qt.WindowModal)
-        pd = QtWidgets.QProgressDialog("Starting…", "Cancel", 0, 0, self)
-        pd.setWindowTitle("Loading")
-        pd.setMinimumDuration(300)
-        pd.setAutoClose(False)
-        pd.setAutoReset(False)
-        pd.setWindowModality(_wm)
-        pd.canceled.connect(self._on_load_cancel)
-        self._progress_dlg = pd
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Loading")
+        dlg.setWindowModality(_wm)
+        _vl = QtWidgets.QVBoxLayout(dlg)
+        _vl.setContentsMargins(20, 16, 20, 16)
+        _vl.setSpacing(10)
+        self._load_label = QtWidgets.QLabel("Starting…")
+        self._load_label.setMinimumWidth(300)
+        _vl.addWidget(self._load_label)
+        _btn_cancel = QtWidgets.QPushButton("Cancel")
+        _btn_cancel.clicked.connect(self._on_load_cancel)
+        _vl.addWidget(_btn_cancel)
+        dlg.finished.connect(self._on_load_cancel)
+        self._progress_dlg = dlg
+        dlg.show()
 
         self._load_worker.start()
 
     def _on_load_progress(self, msg: str) -> None:
-        if hasattr(self, "_progress_dlg"):
-            self._progress_dlg.setLabelText(msg)
+        if hasattr(self, "_load_label"):
+            self._load_label.setText(msg)
 
     def _on_load_cancel(self) -> None:
         if self._load_worker is not None:
             self._load_worker.cancel()
         if hasattr(self, "_progress_dlg"):
+            try:
+                self._progress_dlg.finished.disconnect(self._on_load_cancel)
+            except Exception:
+                pass
             self._progress_dlg.close()
 
     def _on_load_failed(self, msg: str) -> None:
         if hasattr(self, "_progress_dlg"):
+            try:
+                self._progress_dlg.finished.disconnect(self._on_load_cancel)
+            except Exception:
+                pass
             self._progress_dlg.close()
         self.scene.addText(f"Error loading: {msg}")
 
     def _on_load_done(self, result: dict) -> None:
-        if hasattr(self, "_progress_dlg"):
-            self._progress_dlg.close()
         self._trajs_a = result["trajs_a"]
         self._trajs_b = result["trajs_b"]
         self._trajs_c = result["trajs_c"]
+        if hasattr(self, "_load_label"):
+            self._load_label.setText("Building scene…")
         self._rebuild_ui_and_scene(result["roads"], result["parking"])
+        if hasattr(self, "_progress_dlg"):
+            try:
+                self._progress_dlg.finished.disconnect(self._on_load_cancel)
+            except Exception:
+                pass
+            self._progress_dlg.close()
 
     def _rebuild_ui_and_scene(self, roads, parking) -> None:
         all_ids = set(self._trajs_a) | set(self._trajs_b) | set(self._trajs_c)
