@@ -457,6 +457,7 @@ def load_from_mcap(path: str) -> tuple[str | None, dict[int, dict]]:
     """Read MCAP and return (xodr_xml_or_none, trajectories dict).
 
     Requires betterosi. Topics read: ground_truth_map + ground_truth.
+    Produces the same full contract as load_trajectories_full (nanos, df, etc.).
     """
     try:
         import betterosi
@@ -469,12 +470,15 @@ def load_from_mcap(path: str) -> tuple[str | None, dict[int, dict]]:
         if xodr_xml:
             break
 
-    obj_data: dict[int, dict] = {}
+    obj_rows: dict[int, list[dict]] = {}
+    obj_meta: dict[int, tuple[str, str]] = {}
+
     for gt in betterosi.read(path, return_ground_truth=True, mcap_topics=["ground_truth"]):
+        ts = gt.timestamp
+        ts_nanos = int(ts.seconds) * 1_000_000_000 + int(ts.nanos)
         for mo in gt.moving_object:
             oid = int(mo.id.value)
-            x, y = float(mo.base.position.x), float(mo.base.position.y)
-            if oid not in obj_data:
+            if oid not in obj_meta:
                 raw_type = mo.type
                 type_name = raw_type.name if hasattr(raw_type, "name") else str(raw_type)
                 vc = getattr(mo, "vehicle_classification", None)
@@ -485,14 +489,36 @@ def load_from_mcap(path: str) -> tuple[str | None, dict[int, dict]]:
                         vt_name = vt.name if hasattr(vt, "name") else str(vt)
                         if vt_name not in ("UNKNOWN", "OTHER", "0"):
                             subtype_name = vt_name
-                obj_data[oid] = {"type": type_name, "subtype": subtype_name, "points": []}
-            obj_data[oid]["points"].append((x, y))
+                obj_meta[oid] = (type_name, subtype_name)
+            b = mo.base
+            obj_rows.setdefault(oid, []).append({
+                "total_nanos": ts_nanos,
+                "x": float(b.position.x),
+                "y": float(b.position.y),
+                "vel_x": float(b.velocity.x),
+                "vel_y": float(b.velocity.y),
+                "yaw": float(b.orientation.yaw),
+                "length": float(b.dimension.length),
+                "width": float(b.dimension.width),
+                "height": float(b.dimension.height),
+            })
 
-    trajectories = {
-        oid: {"type": d["type"], "subtype": d["subtype"], "xy": np.array(d["points"])}
-        for oid, d in obj_data.items()
-        if len(d["points"]) >= 2
-    }
+    trajectories = {}
+    for oid, rows in obj_rows.items():
+        if len(rows) < 2:
+            continue
+        type_name, subtype_name = obj_meta[oid]
+        df = pd.DataFrame(rows).sort_values("total_nanos").set_index("total_nanos")
+        nanos = df.index.values.astype(np.int64)
+        trajectories[oid] = {
+            "type": type_name,
+            "subtype": subtype_name,
+            "xy": df[["x", "y"]].values,
+            "nanos": nanos,
+            "nanos_set": set(nanos.tolist()),
+            "df": df,
+        }
+
     return xodr_xml, trajectories
 
 
@@ -1127,7 +1153,9 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         kernel = np.exp(-offsets**2 / (2 * self._smooth_sigma**2))
 
         for obj in trajs.values():
-            nanos = obj["nanos"]
+            nanos = obj.get("nanos")
+            if nanos is None:
+                continue
             df = obj["df"]
             raw = np.array([
                 math.sqrt(

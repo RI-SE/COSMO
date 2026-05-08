@@ -140,6 +140,10 @@ Examples:
     prov = ap.add_argument_group("provenance")
     prov.add_argument("--prov-out", metavar="PATH", help="Write W3C-PROV provenance to this file (omit to skip)")
     prov.add_argument("--prov-in", metavar="PATH", help="Continue an existing upstream provenance chain (optional)")
+    prov.add_argument("--georef-prov", metavar="PATH",
+                      help="Provenance file for --georef-data input (will be inlined into output DPR)")
+    prov.add_argument("--flight-record-prov", metavar="PATH",
+                      help="Provenance file for --flight-record input (will be inlined into output DPR)")
 
     return ap
 
@@ -186,15 +190,20 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
 
     inputs = [openlabel]
     input_formats = ["json"]
-    for path, fmt in [
-        (args.opendrive, "xodr"),
-        (args.georef_data, "json"),
-        (args.calibration, "json"),
-        (args.flight_record, "json"),
+    # Parallel list: None = no separate prov file; path = inline this chain into output DPR.
+    # Index 0 (OpenLABEL): its provenance IS prov_in (the chain itself), no separate ref needed.
+    input_prov_files: list[str | None] = [None]
+
+    for path, fmt, prov_path in [
+        (args.opendrive, "xodr", None),
+        (args.georef_data, "json", args.georef_prov if args.georef_prov and Path(args.georef_prov).exists() else None),
+        (args.calibration, "json", None),
+        (args.flight_record, "json", args.flight_record_prov if args.flight_record_prov and Path(args.flight_record_prov).exists() else None),
     ]:
         if path:
             inputs.append(path)
             input_formats.append(fmt)
+            input_prov_files.append(prov_path)
 
     outputs: list[str] = []
     output_formats: list[str] = []
@@ -204,6 +213,8 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
     if result.mcap_path:
         outputs.append(str(result.mcap_path))
         output_formats.append("mcap")
+
+    has_secondary_prov = any(p is not None for p in input_prov_files[1:])
 
     chain.add(
         tool_name="cosmo-convert",
@@ -216,11 +227,11 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
         arguments=" ".join(sys.argv),
         started_at=start_time.isoformat().replace("+00:00", "Z"),
         ended_at=end_time.isoformat().replace("+00:00", "Z"),
-        input_provenance_files=[prov_in] if prov_in else None,
+        input_provenance_files=input_prov_files if (prov_in or has_secondary_prov) else None,
         capture_agent=True,
         capture_environment=True,
     )
-    chain.save(args.prov_out)
+    chain.save(args.prov_out, input_prov="inline" if has_secondary_prov else "reference")
     print(f"Provenance: {args.prov_out}")
 
 

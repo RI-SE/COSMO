@@ -5,6 +5,9 @@ Standalone CLI for correcting OpenLABEL bboxes from oblique drone footage.
 
   cosmo correct input.json --output corrected.json \
     --georef-data georef.json --flight-record video_stats.json
+
+  cosmo correct --input input.json --output corrected.json \
+    --georef-data georef.json --flight-record video_stats.json
 """
 from __future__ import annotations
 
@@ -34,7 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="cosmo correct",
         description="Correct oblique-drone bboxes in an OpenLABEL file (openlabel → corrected openlabel).",
     )
-    ap.add_argument("input", help="Path to OpenLABEL JSON")
+    ap.add_argument("input", nargs="?", help="Path to OpenLABEL JSON (positional alternative to --input/-i)")
+    ap.add_argument("--input", "-i", dest="input_flag", help="Path to OpenLABEL JSON")
     ap.add_argument("--output", "-o", required=True, help="Output path for corrected OpenLABEL JSON")
     ap.add_argument("--georef-data", required=False, help="Path to ORBIT *_georef_data.json")
     ap.add_argument("--calibration", required=False, help="Path to legacy calibration JSON")
@@ -42,8 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Path to FlightRecord_*.video_stats.json")
     ap.add_argument("--flight-record-sequence", type=int, default=0, metavar="N",
                     help="Sequence index within the flight record (default: 0)")
-    ap.add_argument("--correction", choices=["analytical", "3d"], default="analytical",
-                    help="Correction mode (default: analytical)")
+    ap.add_argument("--bbox-correction", choices=["analytical", "3d"], default="analytical",
+                    help="Bbox correction mode (default: analytical)")
     ap.add_argument("--camera-model", default="mavic3pro-standard",
                     help="Camera model key (default: mavic3pro-standard)")
     ap.add_argument("--hfov-deg", type=float, default=None, metavar="FLOAT",
@@ -74,6 +78,10 @@ def build_parser() -> argparse.ArgumentParser:
     prov = ap.add_argument_group("provenance")
     prov.add_argument("--prov-out", metavar="PATH", help="Write W3C-PROV provenance to this file (omit to skip)")
     prov.add_argument("--prov-in", metavar="PATH", help="Continue an existing upstream provenance chain (optional)")
+    prov.add_argument("--flight-record-prov", metavar="PATH",
+                      help="Provenance file for --flight-record input (will be inlined into output DPR)")
+    prov.add_argument("--georef-prov", metavar="PATH",
+                      help="Provenance file for --georef-data input (will be inlined into output DPR)")
 
     return ap
 
@@ -187,12 +195,23 @@ def _record_provenance_correct(
 
     inputs = [input_path, args.flight_record]
     input_formats = ["json", "json"]
+    # Index 0 (OpenLABEL): its provenance IS prov_in; index 1 (flight_record): inline if prov provided.
+    flight_rec_prov = (args.flight_record_prov
+                       if args.flight_record_prov and Path(args.flight_record_prov).exists() else None)
+    input_prov_files: list[str | None] = [None, flight_rec_prov]
+
     if args.georef_data:
         inputs.append(args.georef_data)
         input_formats.append("json")
+        georef_prov = (args.georef_prov
+                       if args.georef_prov and Path(args.georef_prov).exists() else None)
+        input_prov_files.append(georef_prov)
     if args.calibration:
         inputs.append(args.calibration)
         input_formats.append("json")
+        input_prov_files.append(None)
+
+    has_secondary_prov = any(p is not None for p in input_prov_files[1:])
 
     chain.add(
         tool_name="cosmo-correct",
@@ -205,11 +224,11 @@ def _record_provenance_correct(
         arguments=" ".join(sys.argv),
         started_at=start_time.isoformat().replace("+00:00", "Z"),
         ended_at=end_time.isoformat().replace("+00:00", "Z"),
-        input_provenance_files=[prov_in] if prov_in else None,
+        input_provenance_files=input_prov_files if (prov_in or has_secondary_prov) else None,
         capture_agent=True,
         capture_environment=True,
     )
-    chain.save(args.prov_out)
+    chain.save(args.prov_out, input_prov="inline" if has_secondary_prov else "reference")
     print(f"Provenance: {args.prov_out}")
 
 
@@ -217,8 +236,13 @@ def main(argv=None) -> int:
     ap = build_parser()
     args = ap.parse_args(argv)
 
+    if args.input and args.input_flag:
+        ap.error("Provide either a positional input OR --input/-i, not both.")
+    input_path_raw = args.input_flag or args.input
+    if not input_path_raw:
+        ap.error("Missing input. Provide OpenLABEL JSON as positional argument or via --input/-i.")
     try:
-        input_path = _existing_file(args.input)
+        input_path = _existing_file(input_path_raw)
     except argparse.ArgumentTypeError as e:
         ap.error(str(e))
         raise
@@ -255,7 +279,7 @@ def main(argv=None) -> int:
         args.flight_record, args.flight_record_sequence,
         args.camera_model, args.hfov_deg,
     )
-    corrector = BboxCorrector(cam, H, mode=args.correction, proj_string=proj_string,
+    corrector = BboxCorrector(cam, H, mode=args.bbox_correction, proj_string=proj_string,
                               use_gps_cam_pos=args.use_gps_cam_pos)
 
     # For geo output: add coordinate_systems to root
@@ -407,7 +431,7 @@ def main(argv=None) -> int:
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(ol, f, indent=2, ensure_ascii=False)
 
-    print(f"Corrected {n_corrected} bboxes ({args.correction}/{output_coords}) → {out_path}")
+    print(f"Corrected {n_corrected} bboxes ({args.bbox_correction}/{output_coords}) → {out_path}")
 
     if args.prov_out:
         _record_provenance_correct(args, input_path, out_path, start_time, end_time)
