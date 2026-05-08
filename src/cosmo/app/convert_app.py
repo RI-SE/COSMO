@@ -59,6 +59,7 @@ class ConvertConfig:
     # output control
     out_dir: Optional[str] = None  # If None => <project>/runs/<timestamp>_convert_<stem>/
     run_name: Optional[str] = None  # Optional override for the run folder name
+    output_prefix: Optional[str] = None  # Write directly to <prefix>.csv/.mcap (bypasses run-folder)
 
 
 @dataclass(frozen=True)
@@ -173,24 +174,33 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         raise FileNotFoundError(f"OpenLABEL not found: {openlabel_path}")
 
     stem = _safe_stem(openlabel_path.stem)
-    run_dir = _make_run_dir("convert", stem, cfg.out_dir, cfg.run_name)
-    outputs_dir = run_dir / "outputs"
-    base_name = stem
-    out_prefix = outputs_dir / base_name
+
+    if cfg.output_prefix:
+        # Direct-output mode: write <prefix>.csv/.mcap without a run folder
+        out_prefix = Path(cfg.output_prefix).expanduser().resolve()
+        out_prefix.parent.mkdir(parents=True, exist_ok=True)
+        run_dir = out_prefix.parent
+        outputs_dir = run_dir
+        base_name = out_prefix.name
+    else:
+        run_dir = _make_run_dir("convert", stem, cfg.out_dir, cfg.run_name)
+        outputs_dir = run_dir / "outputs"
+        base_name = stem
+        out_prefix = outputs_dir / base_name
 
     notes: List[str] = []
 
-    # record inputs
-    inputs = asdict(cfg)
-    inputs["openlabel"] = str(openlabel_path)
-    if cfg.opendrive:
-        inputs["opendrive"] = str(Path(cfg.opendrive).expanduser().resolve())
-    if cfg.georef_data:
-        inputs["georef_data"] = str(Path(cfg.georef_data).expanduser().resolve())
-    if cfg.calibration:
-        inputs["calibration"] = str(Path(cfg.calibration).expanduser().resolve())
-
-    _write_json(run_dir / "run_inputs.json", inputs)
+    # record inputs (only in run-folder mode)
+    if not cfg.output_prefix:
+        inputs = asdict(cfg)
+        inputs["openlabel"] = str(openlabel_path)
+        if cfg.opendrive:
+            inputs["opendrive"] = str(Path(cfg.opendrive).expanduser().resolve())
+        if cfg.georef_data:
+            inputs["georef_data"] = str(Path(cfg.georef_data).expanduser().resolve())
+        if cfg.calibration:
+            inputs["calibration"] = str(Path(cfg.calibration).expanduser().resolve())
+        _write_json(run_dir / "run_inputs.json", inputs)
 
     # import converter
     converter_fn = _get_converter_or_raise()
@@ -283,32 +293,36 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
     # Best-effort fps_used: converter decides fps from georef/calibration/default if cfg.fps is None
     fps_used = cfg.fps
 
-    summary = {
-        "command": "convert",
-        "run_dir": str(run_dir),
-        "outputs_dir": str(outputs_dir),
-        "base_name": base_name,
-        "csv_path": csv_path if csv_path and Path(csv_path).is_file() else None,
-        "mcap_path": mcap_path if mcap_path and Path(mcap_path).is_file() else None,
-        "fps_used": fps_used,
-        "alignment_source": ("georef-data" if cfg.georef_data else ("calibration" if cfg.calibration else "none")),
-        "applied_xy_offset": list(cfg.xy_offset),
-        "applied_yaw_offset_deg": cfg.yaw_offset_deg,
-        "applied_swap_xy": cfg.swap_xy,
-        "applied_flip_x": cfg.flip_x,
-        "applied_flip_y": cfg.flip_y,
-        "opendrive_embedded": bool(cfg.opendrive),
-        "notes": notes,
-        "python": sys.version,
-    }
-    _write_json(run_dir / "run_summary.json", summary)
+    if not cfg.output_prefix:
+        summary = {
+            "command": "convert",
+            "run_dir": str(run_dir),
+            "outputs_dir": str(outputs_dir),
+            "base_name": base_name,
+            "csv_path": csv_path if csv_path and Path(csv_path).is_file() else None,
+            "mcap_path": mcap_path if mcap_path and Path(mcap_path).is_file() else None,
+            "fps_used": fps_used,
+            "alignment_source": ("georef-data" if cfg.georef_data else ("calibration" if cfg.calibration else "none")),
+            "applied_xy_offset": list(cfg.xy_offset),
+            "applied_yaw_offset_deg": cfg.yaw_offset_deg,
+            "applied_swap_xy": cfg.swap_xy,
+            "applied_flip_x": cfg.flip_x,
+            "applied_flip_y": cfg.flip_y,
+            "opendrive_embedded": bool(cfg.opendrive),
+            "notes": notes,
+            "python": sys.version,
+        }
+        _write_json(run_dir / "run_summary.json", summary)
+
+    csv_path_out = csv_path if csv_path and Path(csv_path).is_file() else None
+    mcap_path_out = mcap_path if mcap_path and Path(mcap_path).is_file() else None
 
     return ConvertResult(
         run_dir=str(run_dir),
         outputs_dir=str(outputs_dir),
         base_name=base_name,
-        csv_path=summary["csv_path"],
-        mcap_path=summary["mcap_path"],
+        csv_path=csv_path_out,
+        mcap_path=mcap_path_out,
         fps_used=fps_used,
         notes=notes,
     )

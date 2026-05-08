@@ -75,6 +75,13 @@ Examples:
         required=False,
         help="Base output directory or explicit run directory",
     )
+    ap.add_argument(
+        "--output-prefix",
+        dest="output_prefix",
+        required=False,
+        metavar="PREFIX",
+        help="Write outputs directly to <PREFIX>.csv and <PREFIX>.mcap (bypasses run-folder structure)",
+    )
 
     # Related inputs
     ap.add_argument("--opendrive", "--odr", dest="opendrive", required=False, help="Path to OpenDRIVE .xodr/.xml/.txt")
@@ -263,6 +270,7 @@ def main(argv=None) -> int:
         use_gps_cam_pos=args.use_gps_cam_pos,
         out_dir=args.out_dir,
         run_name=args.run_name,
+        output_prefix=getattr(args, "output_prefix", None),
         stabilize_size=args.stabilize_size,
     )
 
@@ -276,8 +284,9 @@ def main(argv=None) -> int:
     if args.json:
         print(json.dumps(asdict(result), indent=2))
     else:
-        print(f"\nRun folder: {result.run_dir}")
-        print(f"Outputs: {result.outputs_dir}")
+        if not cfg.output_prefix:
+            print(f"\nRun folder: {result.run_dir}")
+            print(f"Outputs: {result.outputs_dir}")
         if result.csv_path:
             print(f"CSV: {result.csv_path}")
         if result.mcap_path:
