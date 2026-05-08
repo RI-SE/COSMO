@@ -27,11 +27,6 @@ DEFAULT_VEHICLE_HEIGHTS: dict[str, float] = {
 _MIN_LENGTH = 0.5
 _MIN_WIDTH = 0.3
 
-# Skip L-BFGS-B when the analytical result's reprojection loss is already below this.
-# Loss units: 2*(Δcx² + Δcy²) + Δw² + Δh²  (pixels²).
-# A value of 1.0 means center within ~0.7 px and dims within ~1 px — no optimizer gain.
-_3D_SKIP_THRESHOLD = 1.0
-
 
 @dataclass
 class CorrectionResult:
@@ -300,14 +295,6 @@ class BboxCorrector:
         x0, y0 = initial.x, initial.y
         L0, W0 = initial.length, initial.width
         obs = (cx, cy, w_px, h_px, yaw_img)
-
-        # Early-exit: skip optimizer when analytical is already close enough.
-        initial_loss = _fit_loss(np.array([0.0, 0.0, L0, W0]),
-                                 x0, y0, self._H_inv, self._cam_pos, heading_rad, h_veh, obs)
-        if initial_loss < _3D_SKIP_THRESHOLD:
-            return CorrectionResult(x=initial.x, y=initial.y, z=0.0,
-                                    length=initial.length, width=initial.width, height=h_veh,
-                                    method="analytical")
 
         # Bounds: dX/dY within ±5m, L/W within [0.5×, 2.5×] of analytical result
         bounds = [(-5.0, 5.0), (-5.0, 5.0), (max(0.3, L0 * 0.5), L0 * 2.5), (max(0.2, W0 * 0.5), W0 * 2.0)]

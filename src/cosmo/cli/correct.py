@@ -14,13 +14,75 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 
 _COORD_SYSTEM_NAME = "world"
+
+# ---------------------------------------------------------------------------
+# Worker state for frame-parallel correction (set per-process via initializer)
+# ---------------------------------------------------------------------------
+_worker_state: dict = {}
+
+
+def _init_worker(corrector, H, H_inv, objects_meta, towed_by, needs_pixel) -> None:
+    """ProcessPoolExecutor initializer — stores shared read-only state in each worker."""
+    _worker_state["corrector"] = corrector
+    _worker_state["H"] = H
+    _worker_state["H_inv"] = H_inv
+    _worker_state["objects_meta"] = objects_meta
+    _worker_state["towed_by"] = towed_by
+    _worker_state["needs_pixel"] = needs_pixel
+
+
+def _correct_frame_worker(args: tuple) -> tuple:
+    """Compute corrections for all objects in a single frame. Runs in a worker process.
+
+    Returns (frame_id, {oid: CorrectionResult}, {oid: (px_w, px_h)}).
+    px dict is empty when needs_pixel is False.
+    """
+    from cosmo.converters.openlabel_to_omega import (
+        DEFAULT_DIMENSIONS_M,
+        _h_rotation_angle,
+        _resolve_height,
+        angle_wrap,
+    )
+
+    frame_id, frame_objects = args
+    corrector = _worker_state["corrector"]
+    H = _worker_state["H"]
+    H_inv = _worker_state["H_inv"]
+    objects_meta = _worker_state["objects_meta"]
+    towed_by = _worker_state["towed_by"]
+    needs_pixel = _worker_state["needs_pixel"]
+
+    frame_results: dict = {}
+    frame_px: dict = {}
+    for oid, od in frame_objects.items():
+        if "rbbox" not in od:
+            continue
+        cx, cy, w_px, h_px, yaw_img = od["rbbox"]
+        meta = objects_meta.get(oid, {})
+        label_type = meta.get("type", "other")
+        h_veh = _resolve_height(label_type, oid, towed_by, DEFAULT_DIMENSIONS_M)
+        heading_world = angle_wrap(-float(yaw_img) + _h_rotation_angle(H, cx, cy))
+        res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world,
+                                h_veh_override=h_veh)
+        frame_results[oid] = res
+        if needs_pixel:
+            J = _px_per_m_at(H_inv, res.x, res.y)
+            along = np.array([math.cos(yaw_img), math.sin(yaw_img)])
+            across = np.array([-math.sin(yaw_img), math.cos(yaw_img)])
+            frame_px[oid] = (
+                res.length * float(np.linalg.norm(J @ along)),
+                res.width * float(np.linalg.norm(J @ across)),
+            )
+    return frame_id, frame_results, frame_px
 
 
 def _existing_file(p: str) -> str:
@@ -72,6 +134,14 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--stabilize-size", action="store_true",
         help="Replace per-frame dimensions with per-object average; add size_mean/size_std/size_deviation fields.",
+    )
+    ap.add_argument(
+        "--workers", type=int, default=1, metavar="N",
+        help=(
+            "Number of parallel worker processes for the correction pass "
+            "(default: 1, serial). Values >1 use ProcessPoolExecutor but are typically "
+            "slower due to IPC overhead for this workload."
+        ),
     )
 
     # Provenance
@@ -298,39 +368,51 @@ def main(argv=None) -> int:
 
     stabilize_size: bool = args.stabilize_size
 
-    # Pre-pass: collect per-object dims for stabilize_size
+    # --- Parallel correction compute pass ---
+    # All corrections are computed here (parallel or serial), filling correction_cache.
+    # The subsequent JSON mutation pass is always serial and reads from the cache.
     geo_sizes: dict[str, list] = {}
     px_sizes: dict[str, list] = {}
     correction_cache: dict[str, dict[str, object]] = {}
     n_frames = len(frame_items)
-    if stabilize_size:
-        for i, (fkey, _) in enumerate(frame_items):
+    n_workers: int = args.workers
+
+    frame_tasks = [(str(fkey), frames_parsed.get(str(fkey), {}).get("objects", {})) for fkey, _ in frame_items]
+    if n_workers == 1:
+        print(f"  Pre-pass {n_frames} frames...", flush=True)
+    else:
+        print(f"  Pre-pass {n_frames} frames ({n_workers} workers)...", flush=True)
+
+    if n_workers == 1:
+        _init_worker(corrector, H, H_inv, objects_meta, towed_by, needs_pixel)
+        correction_iter = (_correct_frame_worker(t) for t in frame_tasks)
+        pool = None
+    else:
+        pool = ProcessPoolExecutor(
+            max_workers=n_workers,
+            initializer=_init_worker,
+            initargs=(corrector, H, H_inv, objects_meta, towed_by, needs_pixel),
+        )
+        correction_iter = pool.map(_correct_frame_worker, frame_tasks, chunksize=20)
+
+    try:
+        for i, (frame_id, frame_results, frame_px) in enumerate(correction_iter):
             if i % 200 == 0:
                 print(f"  Pre-pass {i}/{n_frames} frames...", flush=True)
-            frame_id = str(fkey)
-            parsed_frame = frames_parsed.get(frame_id, {})
-            for oid, od in parsed_frame.get("objects", {}).items():
-                cx, cy, w_px, h_px, yaw_img = od["rbbox"]
-                meta = objects_meta.get(oid, {})
-                label_type = meta.get("type", "other")
-                h_veh = _resolve_height(label_type, oid, towed_by, DEFAULT_DIMENSIONS_M)
-                heading_world = angle_wrap(-float(yaw_img) + _h_rotation_angle(H, cx, cy))
-                res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh_override=h_veh)
-                correction_cache.setdefault(frame_id, {})[oid] = res
+            correction_cache[frame_id] = frame_results
+            for oid, res in frame_results.items():
                 geo_sizes.setdefault(oid, []).append((res.length, res.width, res.height))
-                if needs_pixel:
-                    J = _px_per_m_at(H_inv, res.x, res.y)
-                    along = np.array([math.cos(yaw_img), math.sin(yaw_img)])
-                    across = np.array([-math.sin(yaw_img), math.cos(yaw_img)])
-                    px_sizes.setdefault(oid, []).append((
-                        res.length * float(np.linalg.norm(J @ along)),
-                        res.width * float(np.linalg.norm(J @ across)),
-                    ))
+            for oid, pxv in frame_px.items():
+                px_sizes.setdefault(oid, []).append(pxv)
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False)
 
+    if stabilize_size:
         geo_mean = {oid: tuple(np.array(v).mean(axis=0).tolist()) for oid, v in geo_sizes.items()}
-        geo_std = {oid: tuple(np.array(v).std(axis=0).tolist()) for oid, v in geo_sizes.items()}
-        px_mean = {oid: tuple(np.array(v).mean(axis=0).tolist()) for oid, v in px_sizes.items()}
-        px_std = {oid: tuple(np.array(v).std(axis=0).tolist()) for oid, v in px_sizes.items()}
+        geo_std  = {oid: tuple(np.array(v).std(axis=0).tolist())  for oid, v in geo_sizes.items()}
+        px_mean  = {oid: tuple(np.array(v).mean(axis=0).tolist()) for oid, v in px_sizes.items()}
+        px_std   = {oid: tuple(np.array(v).std(axis=0).tolist())  for oid, v in px_sizes.items()}
 
     n_corrected = 0
     start_time = datetime.now(timezone.utc)
@@ -342,15 +424,13 @@ def main(argv=None) -> int:
         frame_raw = fval if isinstance(fval, dict) else raw_frames[fkey]
 
         for oid, od in parsed_frame.get("objects", {}).items():
+            if "rbbox" not in od:
+                continue
             cx, cy, w_px, h_px, yaw_img = od["rbbox"]
-            meta = objects_meta.get(oid, {})
-            label_type = meta.get("type", "other")
+            res = correction_cache.get(frame_id, {}).get(oid)
+            if res is None:
+                continue
             heading_world = angle_wrap(-float(yaw_img) + _h_rotation_angle(H, cx, cy))
-            if stabilize_size:
-                res = correction_cache[frame_id][oid]
-            else:
-                h_veh = _resolve_height(label_type, oid, towed_by, DEFAULT_DIMENSIONS_M)
-                res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh_override=h_veh)
 
             geo_L, geo_W, geo_H = res.length, res.width, res.height
 
