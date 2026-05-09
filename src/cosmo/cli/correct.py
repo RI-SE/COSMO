@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
@@ -327,9 +326,7 @@ def main(argv=None) -> int:
 
     # Load homography
     from cosmo.converters.openlabel_to_omega import (
-        DEFAULT_DIMENSIONS_M,
         _h_rotation_angle,
-        _resolve_height,
         angle_wrap,
         build_towed_by,
         load_alignment,
