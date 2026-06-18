@@ -147,6 +147,8 @@ Examples:
     prov = ap.add_argument_group("provenance")
     prov.add_argument("--prov-out", metavar="PATH", help="Write W3C-PROV provenance to this file (omit to skip)")
     prov.add_argument("--prov-in", metavar="PATH", help="Continue an existing upstream provenance chain (optional)")
+    prov.add_argument("--opendrive-prov", metavar="PATH",
+                      help="Provenance file for --opendrive/--odr input (will be inlined into output DPR)")
     prov.add_argument("--georef-prov", metavar="PATH",
                       help="Provenance file for --georef-data input (will be inlined into output DPR)")
     prov.add_argument("--flight-record-prov", metavar="PATH",
@@ -202,7 +204,7 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
     input_prov_files: list[str | None] = [None]
 
     for path, fmt, prov_path in [
-        (args.opendrive, "xodr", None),
+        (args.opendrive, "xodr", args.opendrive_prov if args.opendrive_prov and Path(args.opendrive_prov).exists() else None),
         (args.georef_data, "json", args.georef_prov if args.georef_prov and Path(args.georef_prov).exists() else None),
         (args.calibration, "json", None),
         (args.flight_record, "json", args.flight_record_prov if args.flight_record_prov and Path(args.flight_record_prov).exists() else None),

@@ -463,9 +463,10 @@ wheels = [
 
 [[package]]
 name = "cosmo"
-version = "0.2.0"
+version = "0.3.1"
 source = { editable = "." }
 dependencies = [
+    { name = "dataprov" },
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -524,6 +525,7 @@ trajectory-explorer = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dataprov" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pandas" },
@@ -578,6 +580,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a9/95/a3dbbb5028f35eafb79008e7522a75244477d2838f38cbb722248dabc2a8/cycler-0.12.1.tar.gz", hash = "sha256:88bb128f02ba341da8ef447245a9e138fae777f6a23943da4540077d3601eb1c", size = 7615, upload-time = "2023-10-07T05:32:18.335Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl", hash = "sha256:85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30", size = 8321, upload-time = "2023-10-07T05:32:16.783Z" },
+]
+
+[[package]]
+name = "dataprov"
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ae/a5/a873ee8fa3ca9f3ae02bc1584119e4515cf656e203152796d564ad67d9eb/dataprov-3.2.0.tar.gz", hash = "sha256:e2c76cc3198c671e5953d20e2c39a0264ef4c91f1e04e9ff28343386995d9b93", size = 86968, upload-time = "2026-04-14T12:22:18.831Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/c5/520700bad30e9428bea54d54925656a001a99977ae54a79bae1bb7c0f8f9/dataprov-3.2.0-py3-none-any.whl", hash = "sha256:098891f4496e25d18185d53644b6724f7863181ae83b74ef5cbce83083513ac3", size = 48009, upload-time = "2026-04-14T12:22:17.642Z" },
 ]
 
 [[package]]
