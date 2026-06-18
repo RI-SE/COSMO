@@ -564,6 +564,17 @@ def convert_openlabel_to_omega(
             obj_name_to_idx[oid] = i + 1
             _log(f"[COSMO] Warning: object UID {oid!r} is not numeric; assigned sequential idx {i + 1}")
 
+    # Handle objects referenced in frames but missing from the objects metadata section.
+    # Assigning fallback IDs prevents None from propagating into int() calls later.
+    _all_frame_oids: set = {oid for fd in frames.values() for oid in fd["objects"]}
+    for oid in sorted(_all_frame_oids - set(obj_name_to_idx)):
+        try:
+            obj_name_to_idx[oid] = int(oid)
+        except ValueError:
+            obj_name_to_idx[oid] = max(obj_name_to_idx.values(), default=0) + 1
+        _log(f"[COSMO] Warning: object {oid!r} found in frames but not in objects metadata; "
+             f"assigned id={obj_name_to_idx[oid]}, type defaults to 'other'")
+
     csv_cols = [
         "total_nanos", "idx", "x", "y", "z",
         "vel_x", "vel_y", "vel_z",
