@@ -34,20 +34,8 @@ cosmo-correct = "cosmo.cli.correct:main"
 cosmo-calibrate = "cosmo.cli.calibrate:main"
 trajectory-explorer = "cosmo.trajectory_explorer:main"
 
-# Keep if you want (optional)						 
-[tool.hatch.build]
-include = [
-  "src/cosmo/**/*.py",
-  "src/cosmo/schemas/**/*",
-]
-
-# ✅ Required for src-layout
 [tool.hatch.build.targets.wheel]
 packages = ["src/cosmo"]
-
-# ✅ Strongly recommended for non-python files
-[tool.hatch.build.targets.wheel.force-include]
-"src/cosmo/schemas" = "cosmo/schemas"
 
 
 [tool.ruff]
