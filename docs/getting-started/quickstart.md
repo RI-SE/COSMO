@@ -20,7 +20,7 @@ cosmo.ps1 gui # Same behaviour in Windows PowerShell termial as cosmo (when inst
 ```
 ---
 ## CLI
-> During development `cosmo ...` can be replaced with `python run_cosmo ...`, `cosmo.exe ...` or `cosmo.ps1 ...` with need to install cosmo running, e.g., `pip install -e .` or `pip install -e .[dev]`.
+> During development `cosmo ...` can be replaced with `python run_cosmo ...`, `cosmo.exe ...` or `cosmo.ps1 ...` without needing to install cosmo, e.g., `python run_cosmo.py convert ...`. To install for development use `uv sync --group dev` or `pip install -e . --group dev`.
 ---
 ### Convert (recommended: ORBIT georef)
 

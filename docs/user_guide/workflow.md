@@ -8,12 +8,22 @@ This guide describes the recommended COSMO workflow for typical users: **start i
 
 ## 0) Install COSMO
 
+Recommended with **uv** (the project ships a `uv.lock`):
+
 ```bash
-python -m pip install -U pip
-python -m pip install -e ".[dev]"
+uv sync --group dev          # or --all-groups for gui/mcap/plot/etc.
 ```
 
-This is the same install pattern used by CI.
+With **pip** (≥ 25.1):
+
+```bash
+python -m pip install -U pip
+python -m pip install -e . --group dev
+```
+
+> `[dependency-groups]` are not pip *extras*, so `pip install -e ".[dev]"` does
+> not work. CI installs the base package plus tools explicitly:
+> `pip install -e . pytest ruff`.
 
 ## 1) Start the GUI (recommended starting point)
 
@@ -28,7 +38,7 @@ cosmo gui
 > Headless note: calling plain cosmo (no args) attempts to start the GUI by default—avoid this on servers/CI and use subcommands like cosmo convert … instead.
 
 ### Development shortcut (no editable install required)
-During development (when you don’t want to install with `pip install -e .[dev]`), you can run the GUI directly:
+During development (when you don’t want to install with `uv sync --group dev` / `pip install -e . --group dev`), you can run the GUI directly:
 ```bash
 python run_gui.py
 ```
