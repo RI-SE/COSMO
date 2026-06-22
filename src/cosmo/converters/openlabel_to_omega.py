@@ -235,6 +235,51 @@ def _check_proj_string_match(georef_data_path: str, odr_path: str) -> None:
         )
 
 
+def _read_georef_geo(georef_data_path: Optional[str]) -> Tuple[Optional[str], Optional[float], Optional[float]]:
+    """Return (proj_string, lat, lon) from a georef file; reference_point or first control point."""
+    if not georef_data_path or not os.path.isfile(georef_data_path):
+        return None, None, None
+    try:
+        with open(georef_data_path, encoding="utf-8") as f:
+            georef = json.load(f)
+    except (OSError, ValueError):
+        return None, None, None
+    proj_string = georef.get("proj_string") or None
+    point = georef.get("reference_point")
+    if not point:
+        cps = georef.get("control_points") or []
+        point = cps[0] if cps else None
+    if not point:
+        return proj_string, None, None
+    return proj_string, point.get("latitude"), point.get("longitude")
+
+
+def _resolve_country_code(
+    country_code: Optional[int],
+    lat: Optional[float],
+    lon: Optional[float],
+    log: Callable[[str], None],
+) -> int:
+    """Resolve ISO 3166-1 numeric country code from an explicit value or georef lat/lon."""
+    if country_code:
+        return int(country_code)
+    if lat is None or lon is None:
+        log("[COSMO] No --country-code and no georef lat/lon; country_code left unset.")
+        return 0
+    try:
+        import reverse_geocoder
+        import pycountry
+        alpha2 = reverse_geocoder.search((float(lat), float(lon)), mode=1)[0]["cc"]
+        country = pycountry.countries.get(alpha_2=alpha2)
+        if country is None:
+            log(f"[COSMO] Could not map country '{alpha2}' to ISO numeric; country_code left unset.")
+            return 0
+        return int(country.numeric)
+    except Exception as exc:  # geocoder/lookup unavailable or failed
+        log(f"[COSMO] country_code derivation failed ({exc}); country_code left unset.")
+        return 0
+
+
 def load_alignment(
     calibration_path: Optional[str],
     georef_data_path: Optional[str],
@@ -510,6 +555,7 @@ def convert_openlabel_to_omega(
     log_fn: Optional[Callable[[str], None]] = None,
     corrector=None,
     stabilize_size: bool = False,
+    country_code: Optional[int] = None,
 ):
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP.
@@ -688,6 +734,10 @@ def convert_openlabel_to_omega(
                 map_msg = betterosi.MapAsamOpenDrive(content=odr_xml)
             writer_mcap.add(map_msg, topic="ground_truth_map", log_time=0)
 
+    # File-level GroundTruth fields, resolved once before the frame loop (mcap path only).
+    _gt_proj_string = None
+    _gt_country_code = 0
+
     def _write_ground_truth(writer_mcap, t_sec: float, total_nanos: int, moving_objects_osi: List[Any]):
         gt = betterosi.GroundTruth(
             version=betterosi.InterfaceVersion(version_major=3, version_minor=7, version_patch=0),
@@ -698,6 +748,10 @@ def convert_openlabel_to_omega(
             moving_object=moving_objects_osi,
             host_vehicle_id=betterosi.Identifier(value=0),
         )
+        if _gt_proj_string:
+            gt.proj_string = _gt_proj_string
+        if _gt_country_code:
+            gt.country_code = _gt_country_code
         # Provide log_time explicitly; readers often build indices from it. [4](https://ika-rwth-aachen.github.io/omega-prime/notebooks/tutorial/)[3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/convert_app.py)
         writer_mcap.add(gt, topic="ground_truth", log_time=total_nanos)
 
@@ -705,6 +759,9 @@ def convert_openlabel_to_omega(
     if write_mcap and betterosi is not None:
         mcap_path = f"{out_prefix}.mcap"
         os.makedirs(os.path.dirname(os.path.abspath(mcap_path)) or ".", exist_ok=True)
+
+        _gt_proj_string, _gt_lat, _gt_lon = _read_georef_geo(georef_data_path)
+        _gt_country_code = _resolve_country_code(country_code, _gt_lat, _gt_lon, _log)
 
         with betterosi.Writer(mcap_path) as writer_mcap:
             _write_map(writer_mcap)

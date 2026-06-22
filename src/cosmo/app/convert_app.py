@@ -56,6 +56,9 @@ class ConvertConfig:
     # size stabilization
     stabilize_size: bool = False
 
+    # ISO 3166-1 numeric country code; auto-derived from georef lat/lon if None
+    country_code: Optional[int] = None
+
     # output control
     out_dir: Optional[str] = None  # If None => <project>/runs/<timestamp>_convert_<stem>/
     run_name: Optional[str] = None  # Optional override for the run folder name
@@ -273,6 +276,7 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         log_fn=log_fn,
         corrector=corrector,
         stabilize_size=cfg.stabilize_size,
+        country_code=cfg.country_code,
     )
 
     # determine produced outputs

@@ -137,6 +137,10 @@ Examples:
     ap.add_argument("--stabilize-size", action="store_true",
                     help="Use per-object average dimensions instead of per-frame dimensions.")
 
+    ap.add_argument("--country-code", type=int, default=None,
+                    help="ISO 3166-1 numeric country code (e.g. 752=Sweden); "
+                         "auto-derived from georef lat/lon if omitted.")
+
     # Run folder naming
     ap.add_argument("--run-name", required=False, help="Optional override for run folder name")
 
@@ -274,6 +278,7 @@ def main(argv=None) -> int:
         run_name=args.run_name,
         output_prefix=getattr(args, "output_prefix", None),
         stabilize_size=args.stabilize_size,
+        country_code=args.country_code,
     )
 
     def _log(line: str) -> None:

@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cosmo"
-version = "0.4.0"
+version = "0.4.1"
 description = "COSMO conversion tools (OpenLABEL -> OSI/MCAP + Omega-Prime CSV) with GUI"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy", "pandas", "pillow", "matplotlib", "dataprov"]
+dependencies = ["numpy", "pandas", "pillow", "matplotlib", "dataprov", "reverse_geocoder", "pycountry"]
 
 
 [dependency-groups]
