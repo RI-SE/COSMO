@@ -22,7 +22,7 @@ COSMO converts **ASAM OpenLABEL** annotations into:
 
 ![COSMO main window](docs/images/screenshot_main_window.png)
 
- [!NOTE]
+> [!NOTE]
 > This is a beta version. Bugs and missing features should be expected. Github issues can be added for bug reports or feature requests.
 
 > Maintained by **RISE Research Institutes of Sweden**. Developed in the SYNERGIES project.
@@ -31,7 +31,7 @@ COSMO converts **ASAM OpenLABEL** annotations into:
 ## Documentation (quick links)
 - [Docs index](docs/README.md)
 - [Quickstart](docs/getting-started/quickstart.md)
-- [CLI](docs/user-guide/cli.md)
+- [CLI](docs/user_guide/cli.md)
 - [Outputs (CSV/MCAP)](docs/reference/outputs-omega-prime.md)
 - [Troubleshooting](docs/how-to/troubleshooting.md)
 ---
@@ -83,17 +83,36 @@ cosmo convert scenario.json \
   -o runs/
 ```
 ---
+## Optional preprocessing: correct oblique-drone bboxes
+
+For footage from an oblique (tilted) drone camera, object bounding boxes are
+geometrically distorted. `cosmo correct` rewrites an OpenLABEL file into a
+corrected OpenLABEL file before conversion:
+
+```bash
+cosmo correct scenario.json \
+  --georef-data path/to/*_georef_data.json \
+  --flight-record path/to/FlightRecord_*.video_stats.json \
+  -o scenario_corrected.json
+```
+
+Then feed the corrected file to `cosmo convert`. Key options:
+- `--georef-data` / `--calibration`: pixel→ground mapping (one is required).
+- `--flight-record` (required): drone/camera pose per frame.
+- `--bbox-correction {analytical,3d}`: correction mode (default: analytical).
+- `--output-coords {pixel,geo,both}`: corrected pixel rbbox (default), world cuboid, or both.
+- `--stabilize-size`: replace per-frame dimensions with the per-object average.
+
+---
 ## Documentation (start here)
 
 * 📌 Docs index: docs/README.md
 * Getting started:
-  - docs/getting-started/installation.md
   - docs/getting-started/quickstart.md
 * User guide:
-  - docs/user-guide/cli.md
-  - docs/user-guide/workflow.md
+  - docs/user_guide/cli.md
+  - docs/user_guide/workflow.md
 * How-to:
-  - docs/how-to/orbit-georef.md
   - docs/how-to/calibration.md
   - docs/how-to/troubleshooting.md
 * Reference:
@@ -110,7 +129,7 @@ cosmo convert scenario.json \
 * MCAP output requires betterosi. If MCAP is requested but betterosi is missing, COSMO logs that it will write CSV only.
 * MCAP topics written:
   - ground_truth_map (OpenDRIVE, if provided)
-  - ground_truth (OSI GroundTruth per frame) [risecloud-...epoint.com]
+  - ground_truth (OSI GroundTruth per frame)
 
 ---
 
