@@ -95,8 +95,8 @@ Also adds `size_std` and `size_deviation` vec entries to the OpenLabel output, w
 trajectory explorer surfaces as a ΔL×W×H column and a size σ tooltip.
 
 ### Correction modes
-- `--correction analytical` (default): fast homography-based
-- `--correction 3d`: ray-casting using the flight record camera model; requires `--flight-record`
+- `--bbox-correction analytical` (default): fast homography-based
+- `--bbox-correction 3d`: ray-casting using the flight record camera model; requires `--flight-record`
 
 ### Typical two-step workflow
 ```bash

@@ -25,7 +25,6 @@ Other helpful artifacts:
 cosmo convert scenario.json \
   --calibration runs/<calibrate_run>/outputs/<base_name>_calibration.json \
   -o runs/
-``
 ```
 
 ## Troubleshooting

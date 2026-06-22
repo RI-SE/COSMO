@@ -53,10 +53,10 @@ means the mapping varies across the image.
 2. Map `(cx + 1, cy)` → world point `P1`  (one pixel to the right)
 3. `h_rot = atan2(P1.Y − P0.Y, P1.X − P0.X)` — the compass angle that image +x corresponds to at that position
 
-Then:
+Then (the `yaw_img` term is negated because image y points down, opposite to the world frame):
 
 ```
-heading_world = angle_wrap(yaw_img + h_rot)
+heading_world = angle_wrap(-yaw_img + h_rot)
 ```
 
 ### Why per-object, not once at image center?
