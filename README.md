@@ -55,7 +55,7 @@ python -m pip install -e . --group dev
 > Tip 1: The **GUI** is launced with `cosmo` or `cosmo gui`.
 > Tip 2: During development with downloaded repro, all `cosmo` commands can be replaced with `python run_cosmo.py ...`, `cosmo.cmd ...` or `cosmo.ps1 ...`. `python run_gui.py` always starts the **GUI**.
 
-Convert using ORBIT georef as the primary pixel→ground mapping (**Convert** tab in the **GUI**):
+Convert using [ORBIT](https://github.com/RI-SE/ORBIT) georef as the primary pixel→ground mapping (**Convert** tab in the **GUI**):
 
 ```bash
 cosmo convert scenario.json \
@@ -164,7 +164,7 @@ It needs the GUI dependencies (PyQt5); install its dependency group with
 ## Status and License
 
 - Beta.
-- ORBIT is licensed under the [GNU General Public License v3.0 (GPL-3.0)](LICENSE).
+- COSMO is licensed under the [GNU General Public License v3.0 (GPL-3.0)](LICENSE).
 
 ## Acknowledgement
 <br><div align="center">
