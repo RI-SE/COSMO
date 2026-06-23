@@ -267,8 +267,8 @@ def _resolve_country_code(
         log("[COSMO] No --country-code and no georef lat/lon; country_code left unset.")
         return 0
     try:
-        import reverse_geocoder
         import pycountry
+        import reverse_geocoder
         alpha2 = reverse_geocoder.search((float(lat), float(lon)), mode=1)[0]["cc"]
         country = pycountry.countries.get(alpha_2=alpha2)
         if country is None:
