@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cosmo.app.calibrate_app import CalibrateConfig, run_calibrate
@@ -74,6 +76,12 @@ Examples:
     ap.add_argument("--run-name", required=False, help="Optional override for run folder name")
 
     ap.add_argument("--json", action="store_true", help="Print result as JSON")
+
+    # Provenance
+    prov = ap.add_argument_group("provenance")
+    prov.add_argument("--prov-out", metavar="PATH", help="Write W3C-PROV provenance to this file (omit to skip)")
+    prov.add_argument("--prov-in", metavar="PATH", help="Continue an existing upstream provenance chain (optional)")
+
     return ap
 
 
@@ -132,6 +140,57 @@ def _resolve_inputs(args: argparse.Namespace, ap: argparse.ArgumentParser) -> tu
     return pixel_pairs, visual_markers, opendrive
 
 
+def _record_provenance_calibrate(
+    args, pixel_pairs: str, visual_markers: str, opendrive: str,
+    result, start_time: datetime, end_time: datetime,
+) -> None:
+    """Record a dataprov provenance step for cosmo-calibrate."""
+    try:
+        from importlib.metadata import version as _pkg_version
+        tool_version = _pkg_version("cosmo")
+    except Exception:
+        tool_version = "unknown"
+
+    from dataprov import ProvenanceChain
+
+    prov_in = args.prov_in
+    if prov_in and Path(prov_in).exists():
+        chain = ProvenanceChain.load(prov_in)
+    else:
+        chain = ProvenanceChain.create(
+            entity_id=f"calibrate:{Path(pixel_pairs).stem}",
+            initial_source=pixel_pairs,
+            description=f"Calibration from {Path(pixel_pairs).name}",
+        )
+
+    inputs = [pixel_pairs, visual_markers, opendrive]
+    input_formats = ["csv", "csv", "xodr"]
+    if args.image:
+        inputs.append(args.image)
+        input_formats.append("png")
+    if args.openlabel:
+        inputs.append(args.openlabel)
+        input_formats.append("json")
+
+    chain.add(
+        tool_name="cosmo-calibrate",
+        tool_version=tool_version,
+        operation="calibrate",
+        inputs=inputs,
+        input_formats=input_formats,
+        outputs=[str(result.calibration_json_path)],
+        output_formats=["json"],
+        arguments=" ".join(sys.argv),
+        started_at=start_time.isoformat().replace("+00:00", "Z"),
+        ended_at=end_time.isoformat().replace("+00:00", "Z"),
+        input_provenance_files=[prov_in] if prov_in else None,
+        capture_agent=True,
+        capture_environment=True,
+    )
+    chain.save(args.prov_out)
+    print(f"Provenance: {args.prov_out}")
+
+
 def main(argv=None) -> int:
     ap = build_parser()
     args = ap.parse_args(argv)
@@ -155,7 +214,9 @@ def main(argv=None) -> int:
     def _log(line: str) -> None:
         print(line, flush=True)
 
+    start_time = datetime.now(timezone.utc)
     result = run_calibrate(cfg, log_fn=_log)
+    end_time = datetime.now(timezone.utc)
 
     if args.json:
         print(json.dumps(asdict(result), indent=2))
@@ -173,6 +234,9 @@ def main(argv=None) -> int:
             print("Notes:")
             for n in result.notes:
                 print(f" - {n}")
+
+    if args.prov_out:
+        _record_provenance_calibrate(args, pixel_pairs, visual_markers, opendrive, result, start_time, end_time)
 
     return 0
 

@@ -43,10 +43,26 @@ class ConvertConfig:
     flip_y: bool = False
     xy_offset: Tuple[float, float] = (0.0, 0.0)
     yaw_offset_deg: float = 0.0
+    strip_xodr_namespace: bool = False
+
+    # oblique correction
+    flight_record: Optional[str] = None
+    flight_record_sequence: int = 0
+    bbox_correction: str = "none"   # "none" | "analytical" | "3d"
+    camera_model: str = "mavic3pro-standard"
+    hfov_deg: Optional[float] = None
+    use_gps_cam_pos: bool = False
+
+    # size stabilization
+    stabilize_size: bool = False
+
+    # ISO 3166-1 numeric country code; auto-derived from georef lat/lon if None
+    country_code: Optional[int] = None
 
     # output control
     out_dir: Optional[str] = None  # If None => <project>/runs/<timestamp>_convert_<stem>/
     run_name: Optional[str] = None  # Optional override for the run folder name
+    output_prefix: Optional[str] = None  # Write directly to <prefix>.csv/.mcap (bypasses run-folder)
 
 
 @dataclass(frozen=True)
@@ -161,24 +177,33 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         raise FileNotFoundError(f"OpenLABEL not found: {openlabel_path}")
 
     stem = _safe_stem(openlabel_path.stem)
-    run_dir = _make_run_dir("convert", stem, cfg.out_dir, cfg.run_name)
-    outputs_dir = run_dir / "outputs"
-    base_name = stem
-    out_prefix = outputs_dir / base_name
+
+    if cfg.output_prefix:
+        # Direct-output mode: write <prefix>.csv/.mcap without a run folder
+        out_prefix = Path(cfg.output_prefix).expanduser().resolve()
+        out_prefix.parent.mkdir(parents=True, exist_ok=True)
+        run_dir = out_prefix.parent
+        outputs_dir = run_dir
+        base_name = out_prefix.name
+    else:
+        run_dir = _make_run_dir("convert", stem, cfg.out_dir, cfg.run_name)
+        outputs_dir = run_dir / "outputs"
+        base_name = stem
+        out_prefix = outputs_dir / base_name
 
     notes: List[str] = []
 
-    # record inputs
-    inputs = asdict(cfg)
-    inputs["openlabel"] = str(openlabel_path)
-    if cfg.opendrive:
-        inputs["opendrive"] = str(Path(cfg.opendrive).expanduser().resolve())
-    if cfg.georef_data:
-        inputs["georef_data"] = str(Path(cfg.georef_data).expanduser().resolve())
-    if cfg.calibration:
-        inputs["calibration"] = str(Path(cfg.calibration).expanduser().resolve())
-
-    _write_json(run_dir / "run_inputs.json", inputs)
+    # record inputs (only in run-folder mode)
+    if not cfg.output_prefix:
+        inputs = asdict(cfg)
+        inputs["openlabel"] = str(openlabel_path)
+        if cfg.opendrive:
+            inputs["opendrive"] = str(Path(cfg.opendrive).expanduser().resolve())
+        if cfg.georef_data:
+            inputs["georef_data"] = str(Path(cfg.georef_data).expanduser().resolve())
+        if cfg.calibration:
+            inputs["calibration"] = str(Path(cfg.calibration).expanduser().resolve())
+        _write_json(run_dir / "run_inputs.json", inputs)
 
     # import converter
     converter_fn = _get_converter_or_raise()
@@ -200,6 +225,38 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         )
         log_fn(f"[COSMO] OpenDRIVE embedded: {'yes' if cfg.opendrive else 'no'}")
 
+    # Build oblique corrector if requested
+    corrector = None
+    if cfg.flight_record and cfg.bbox_correction != "none":
+        try:
+            from cosmo.converters.openlabel_to_omega import load_alignment
+            from cosmo.corrections import BboxCorrector, load_camera_from_flight_record
+            georef_path = str(Path(cfg.georef_data).expanduser().resolve()) if cfg.georef_data else None
+            calib_path = str(Path(cfg.calibration).expanduser().resolve()) if cfg.calibration else None
+            _, H_corr, _ = load_alignment(calib_path, georef_path, cfg.fps)
+            if H_corr is not None:
+                cam = load_camera_from_flight_record(
+                    cfg.flight_record, cfg.flight_record_sequence,
+                    cfg.camera_model, cfg.hfov_deg,
+                )
+                proj_string = None
+                if georef_path:
+                    import json as _json
+                    with open(georef_path, encoding="utf-8") as _f:
+                        proj_string = _json.load(_f).get("proj_string")
+                corrector = BboxCorrector(cam, H_corr, mode=cfg.bbox_correction,
+                                          proj_string=proj_string,
+                                          use_gps_cam_pos=cfg.use_gps_cam_pos)
+                if log_fn:
+                    log_fn(f"[COSMO] Oblique correction: mode={cfg.bbox_correction}, "
+                           f"height={cam.drone_height:.1f}m, el={cam.elevation_angle_deg:.1f}° from nadir")
+            else:
+                if log_fn:
+                    log_fn("[COSMO] Oblique correction skipped: no homography available")
+        except Exception as exc:
+            if log_fn:
+                log_fn(f"[COSMO] Oblique correction setup failed: {exc}")
+
     # Call converter (pass log_fn through)
     converter_fn(
         openlabel_path=str(openlabel_path),
@@ -215,7 +272,11 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         flip_y=cfg.flip_y,
         xy_offset=cfg.xy_offset,
         yaw_offset_rad=(cfg.yaw_offset_deg * 3.141592653589793 / 180.0),
-        log_fn=log_fn,  # << NEW
+        strip_xodr_namespace=cfg.strip_xodr_namespace,
+        log_fn=log_fn,
+        corrector=corrector,
+        stabilize_size=cfg.stabilize_size,
+        country_code=cfg.country_code,
     )
 
     # determine produced outputs
@@ -236,32 +297,36 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
     # Best-effort fps_used: converter decides fps from georef/calibration/default if cfg.fps is None
     fps_used = cfg.fps
 
-    summary = {
-        "command": "convert",
-        "run_dir": str(run_dir),
-        "outputs_dir": str(outputs_dir),
-        "base_name": base_name,
-        "csv_path": csv_path if csv_path and Path(csv_path).is_file() else None,
-        "mcap_path": mcap_path if mcap_path and Path(mcap_path).is_file() else None,
-        "fps_used": fps_used,
-        "alignment_source": ("georef-data" if cfg.georef_data else ("calibration" if cfg.calibration else "none")),
-        "applied_xy_offset": list(cfg.xy_offset),
-        "applied_yaw_offset_deg": cfg.yaw_offset_deg,
-        "applied_swap_xy": cfg.swap_xy,
-        "applied_flip_x": cfg.flip_x,
-        "applied_flip_y": cfg.flip_y,
-        "opendrive_embedded": bool(cfg.opendrive),
-        "notes": notes,
-        "python": sys.version,
-    }
-    _write_json(run_dir / "run_summary.json", summary)
+    if not cfg.output_prefix:
+        summary = {
+            "command": "convert",
+            "run_dir": str(run_dir),
+            "outputs_dir": str(outputs_dir),
+            "base_name": base_name,
+            "csv_path": csv_path if csv_path and Path(csv_path).is_file() else None,
+            "mcap_path": mcap_path if mcap_path and Path(mcap_path).is_file() else None,
+            "fps_used": fps_used,
+            "alignment_source": ("georef-data" if cfg.georef_data else ("calibration" if cfg.calibration else "none")),
+            "applied_xy_offset": list(cfg.xy_offset),
+            "applied_yaw_offset_deg": cfg.yaw_offset_deg,
+            "applied_swap_xy": cfg.swap_xy,
+            "applied_flip_x": cfg.flip_x,
+            "applied_flip_y": cfg.flip_y,
+            "opendrive_embedded": bool(cfg.opendrive),
+            "notes": notes,
+            "python": sys.version,
+        }
+        _write_json(run_dir / "run_summary.json", summary)
+
+    csv_path_out = csv_path if csv_path and Path(csv_path).is_file() else None
+    mcap_path_out = mcap_path if mcap_path and Path(mcap_path).is_file() else None
 
     return ConvertResult(
         run_dir=str(run_dir),
         outputs_dir=str(outputs_dir),
         base_name=base_name,
-        csv_path=summary["csv_path"],
-        mcap_path=summary["mcap_path"],
+        csv_path=csv_path_out,
+        mcap_path=mcap_path_out,
         fps_used=fps_used,
         notes=notes,
     )

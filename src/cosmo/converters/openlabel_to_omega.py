@@ -39,6 +39,7 @@ try:
 except ImportError:  # pragma: no cover
     betterosi = None
 
+from cosmo.converters.ontology_mapper import OntologyMapper
 
 # -----------------------------------------------------------------------------
 # Defaults
@@ -49,6 +50,7 @@ DEFAULT_DIMENSIONS_M: Dict[str, Dict[str, float]] = {
     "truck": {"length": 12.0, "width": 2.5, "height": 3.5},
     "bus": {"length": 12.0, "width": 2.5, "height": 3.2},
     "van": {"length": 5.0, "width": 2.0, "height": 2.2},
+    "trailer": {"length": 6.0, "width": 2.0, "height": 2.5},
     "pedestrian": {"length": 0.5, "width": 0.5, "height": 1.7},
     "other": {"length": 3.0, "width": 1.5, "height": 1.5},
 }
@@ -128,9 +130,155 @@ def angle_wrap(yaw: float) -> float:
     return (yaw + math.pi) % (2 * math.pi) - math.pi
 
 
+def _h_rotation_angle(H: np.ndarray, cx: float, cy: float) -> float:
+    """Angle (rad) that image +x direction maps to in world space via H."""
+    X0, Y0 = apply_homography(H, cx, cy)
+    X1, Y1 = apply_homography(H, cx + 1.0, cy)
+    return math.atan2(Y1 - Y0, X1 - X0)
+
+
+def _footprint_from_homography(
+    H: np.ndarray,
+    cx: float, cy: float,
+    w_px: float, h_px: float,
+    yaw_img: float,
+    heading_rad: float,
+) -> Tuple[float, float]:
+    """Return (length_m, width_m) by projecting rbbox corners through H.
+
+    Identical to BboxCorrector._correct_analytical steps 1–3, without the
+    height-induced projection correction (no camera pose needed).
+    """
+    cos_a, sin_a = math.cos(yaw_img), math.sin(yaw_img)
+    hw, hh = w_px / 2, h_px / 2
+    corners_px = [
+        (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
+        for dx, dy in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh))
+    ]
+    corners_world = [apply_homography(H, u, v) for u, v in corners_px]
+    cos_h, sin_h = math.cos(-heading_rad), math.sin(-heading_rad)
+    veh_xs = [x * cos_h - y * sin_h for x, y in corners_world]
+    veh_ys = [x * sin_h + y * cos_h for x, y in corners_world]
+    return max(veh_xs) - min(veh_xs), max(veh_ys) - min(veh_ys)
+
+
+def _resolve_height(
+    label_type: str,
+    obj_uid: str,
+    towed_by: Dict[str, str],
+    defaults: Dict[str, Dict[str, float]],
+) -> float:
+    """Return height for an object, using towing vehicle type for trailers."""
+    key = label_type.lower()
+    if key == "trailer":
+        tower_type = towed_by.get(obj_uid)
+        if tower_type:
+            key = tower_type
+    return float(defaults.get(key, defaults.get("other", {})).get("height", 1.5))
+
+
+def build_towed_by(root: Dict[str, Any], objects_meta: Dict[str, Any]) -> Dict[str, str]:
+    """Map trailer_uid → towing vehicle type from openlabel 'towed-by' relations."""
+    result: Dict[str, str] = {}
+    for rel in (root.get("relations") or {}).values():
+        if rel.get("type") == "towed-by":
+            subjects = rel.get("rdf_subjects", [])
+            objects_ = rel.get("rdf_objects", [])
+            if subjects and objects_:
+                trailer_uid = str(subjects[0].get("uid", ""))
+                tower_uid = str(objects_[0].get("uid", ""))
+                tower_type = objects_meta.get(tower_uid, {}).get("type", "")
+                if trailer_uid and tower_type:
+                    result[trailer_uid] = tower_type.lower()
+    return result
+
+
 # -----------------------------------------------------------------------------
 # ORBIT georef + calibration loading
 # -----------------------------------------------------------------------------
+
+def _check_proj_string_match(georef_data_path: str, odr_path: str) -> None:
+    """Raise ValueError if georef and XODR describe different coordinate systems."""
+    with open(georef_data_path, encoding="utf-8") as f:
+        georef = json.load(f)
+    georef_proj = georef.get("proj_string")
+
+    with open(odr_path, encoding="utf-8", errors="ignore") as f:
+        xodr_text = f.read()
+    m = re.search(r"<geoReference>(.*?)</geoReference>", xodr_text, re.S)
+    xodr_proj = m.group(1).strip() if m else None
+
+    if not georef_proj and not xodr_proj:
+        return  # Both old-format, nothing to compare
+    if not georef_proj:
+        raise ValueError(
+            "Georef file has no proj_string (old v1.0 format). "
+            "Re-export the georef from ORBIT to get a v1.1 file with projection info."
+        )
+    if not xodr_proj:
+        raise ValueError(
+            "XODR file has no <geoReference>. Cannot verify projection match with georef."
+        )
+
+    def _normalize(s: str) -> str:
+        # Strip origin-only params that may differ between XODR and georef for UTM
+        s = re.sub(r'\+lat_0=\S+', '', s)
+        s = re.sub(r'\+lon_0=\S+', '', s)
+        return ' '.join(s.split())
+
+    if _normalize(georef_proj) != _normalize(xodr_proj):
+        raise ValueError(
+            f"Projection mismatch between georef and XODR:\n"
+            f"  georef: {georef_proj}\n"
+            f"  XODR:   {xodr_proj}\n"
+            "Re-export both files from ORBIT using the same projection."
+        )
+
+
+def _read_georef_geo(georef_data_path: Optional[str]) -> Tuple[Optional[str], Optional[float], Optional[float]]:
+    """Return (proj_string, lat, lon) from a georef file; reference_point or first control point."""
+    if not georef_data_path or not os.path.isfile(georef_data_path):
+        return None, None, None
+    try:
+        with open(georef_data_path, encoding="utf-8") as f:
+            georef = json.load(f)
+    except (OSError, ValueError):
+        return None, None, None
+    proj_string = georef.get("proj_string") or None
+    point = georef.get("reference_point")
+    if not point:
+        cps = georef.get("control_points") or []
+        point = cps[0] if cps else None
+    if not point:
+        return proj_string, None, None
+    return proj_string, point.get("latitude"), point.get("longitude")
+
+
+def _resolve_country_code(
+    country_code: Optional[int],
+    lat: Optional[float],
+    lon: Optional[float],
+    log: Callable[[str], None],
+) -> int:
+    """Resolve ISO 3166-1 numeric country code from an explicit value or georef lat/lon."""
+    if country_code:
+        return int(country_code)
+    if lat is None or lon is None:
+        log("[COSMO] No --country-code and no georef lat/lon; country_code left unset.")
+        return 0
+    try:
+        import pycountry
+        import reverse_geocoder
+        alpha2 = reverse_geocoder.search((float(lat), float(lon)), mode=1)[0]["cc"]
+        country = pycountry.countries.get(alpha_2=alpha2)
+        if country is None:
+            log(f"[COSMO] Could not map country '{alpha2}' to ISO numeric; country_code left unset.")
+            return 0
+        return int(country.numeric)
+    except Exception as exc:  # geocoder/lookup unavailable or failed
+        log(f"[COSMO] country_code derivation failed ({exc}); country_code left unset.")
+        return 0
+
 
 def load_alignment(
     calibration_path: Optional[str],
@@ -276,8 +424,8 @@ def build_enum_code_maps():
     vt_name_to_code, vr_name_to_code = {}, {}
     vt_default, vr_default = 0, 0
     if betterosi is not None:
-        VT = getattr(betterosi, "VehicleType", None)
-        VR = getattr(betterosi, "VehicleRole", None)
+        VT = getattr(betterosi, "MovingObjectVehicleClassificationType", None)
+        VR = getattr(betterosi, "MovingObjectVehicleClassificationRole", None)
         if VT is not None:
             for m in VT:
                 vt_name_to_code[_canonical(m.name)] = m.value
@@ -285,7 +433,7 @@ def build_enum_code_maps():
         if VR is not None:
             for m in VR:
                 vr_name_to_code[_canonical(m.name)] = m.value
-            vr_default = vr_name_to_code.get("MOVING", vr_default)
+            vr_default = vr_name_to_code.get("CIVIL", vr_default)
     return vt_name_to_code, vr_name_to_code, vt_default, vr_default
 
 
@@ -303,27 +451,20 @@ def make_vehicle_classification(
     vt_code = vt_name_to_code.get(subtype_upper, vt_default)
     vr_code = vr_name_to_code.get(role_upper, vr_default)
 
-    VT = getattr(betterosi, "VehicleType", None)
-    VR = getattr(betterosi, "VehicleRole", None)
-    if VT is None or VR is None:
-        return betterosi.MovingObjectVehicleClassification()
-
-    vt_member = None
-    vr_member = None
-    try:
-        vt_member = VT(vt_code)
-    except Exception:
-        pass
-    try:
-        vr_member = VR(vr_code)
-    except Exception:
-        pass
+    VT = getattr(betterosi, "MovingObjectVehicleClassificationType", None)
+    VR = getattr(betterosi, "MovingObjectVehicleClassificationRole", None)
 
     kwargs = {}
-    if vt_member is not None:
-        kwargs["type"] = vt_member
-    if vr_member is not None:
-        kwargs["role"] = vr_member
+    if VT is not None:
+        try:
+            kwargs["type"] = VT(vt_code)
+        except Exception:
+            pass
+    if VR is not None:
+        try:
+            kwargs["role"] = VR(vr_code)
+        except Exception:
+            pass
 
     return betterosi.MovingObjectVehicleClassification(**kwargs) if kwargs else betterosi.MovingObjectVehicleClassification()
 
@@ -410,7 +551,11 @@ def convert_openlabel_to_omega(
     flip_y: bool = False,
     xy_offset: Tuple[float, float] = (0.0, 0.0),
     yaw_offset_rad: float = 0.0,
+    strip_xodr_namespace: bool = False,
     log_fn: Optional[Callable[[str], None]] = None,
+    corrector=None,
+    stabilize_size: bool = False,
+    country_code: Optional[int] = None,
 ):
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP.
@@ -429,6 +574,18 @@ def convert_openlabel_to_omega(
 
     ol = load_json(openlabel_path)
     objects_meta, frames = parse_openlabel(ol)
+
+    root = ol.get("openlabel", ol)
+    towed_by = build_towed_by(root, objects_meta)
+
+    _ont_urls = [
+        url for url in (root.get("ontologies") or {}).values()
+        if isinstance(url, str) and url.startswith("http")
+    ]
+    mapper = OntologyMapper(_ont_urls)
+    if georef_data_path and odr_path and os.path.isfile(odr_path):
+        _check_proj_string_match(georef_data_path, odr_path)
+
     fps, H, defaults = load_alignment(calibration_path, georef_data_path, fps_arg)
     alignment_source = 'none'
     if georef_data_path:
@@ -444,8 +601,25 @@ def convert_openlabel_to_omega(
 
     vt_name_to_code, vr_name_to_code, vt_default, vr_default = build_enum_code_maps()
 
-    # Assign stable indices
-    obj_name_to_idx: Dict[str, int] = {oid: i + 1 for i, oid in enumerate(sorted(objects_meta.keys()))}
+    # Assign indices: use numeric UID directly if possible, else fall back to sequential
+    obj_name_to_idx: Dict[str, int] = {}
+    for i, oid in enumerate(sorted(objects_meta.keys())):
+        try:
+            obj_name_to_idx[oid] = int(oid)
+        except ValueError:
+            obj_name_to_idx[oid] = i + 1
+            _log(f"[COSMO] Warning: object UID {oid!r} is not numeric; assigned sequential idx {i + 1}")
+
+    # Handle objects referenced in frames but missing from the objects metadata section.
+    # Assigning fallback IDs prevents None from propagating into int() calls later.
+    _all_frame_oids: set = {oid for fd in frames.values() for oid in fd["objects"]}
+    for oid in sorted(_all_frame_oids - set(obj_name_to_idx)):
+        try:
+            obj_name_to_idx[oid] = int(oid)
+        except ValueError:
+            obj_name_to_idx[oid] = max(obj_name_to_idx.values(), default=0) + 1
+        _log(f"[COSMO] Warning: object {oid!r} found in frames but not in objects metadata; "
+             f"assigned id={obj_name_to_idx[oid]}, type defaults to 'other'")
 
     csv_cols = [
         "total_nanos", "idx", "x", "y", "z",
@@ -488,11 +662,11 @@ def convert_openlabel_to_omega(
             return X, Y, 0.0
         return cx * 0.01, cy * 0.01, 0.0
 
-    def estimate_dims(label_type: str, w_px: float, h_px: float) -> Tuple[float, float, float]:
+    def estimate_dims(label_type: str, w_px: float, h_px: float, obj_uid: str = "") -> Tuple[float, float, float]:
         dims = defaults.get(label_type.lower(), defaults.get("other", {}))
         length = float(dims.get("length", w_px * 0.01))
         width = float(dims.get("width", h_px * 0.01))
-        height = float(dims.get("height", 1.5))
+        height = _resolve_height(label_type, obj_uid, towed_by, defaults)
         return length, width, height
 
     def compute_kinematics(idx: int, X: float, Y: float, Z: float) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
@@ -513,6 +687,35 @@ def convert_openlabel_to_omega(
         last_positions[idx] = (X, Y, Z)
         last_velocities[idx] = vel
 
+    def _collect_all_dims() -> Dict[str, Tuple[float, float, float]]:
+        """Pass over all frames collecting per-object geo dims; return per-object mean."""
+        geo_sizes: Dict[str, List[Tuple[float, float, float]]] = {}
+        for frame_id, _ in sorted_frames:
+            frame = frames[frame_id]
+            for oid, od in frame["objects"].items():
+                cx, cy, w_px, h_px, yaw_img = od["rbbox"]
+                meta = objects_meta.get(oid, {})
+                label_type = meta.get("type", "other")
+                heading_world = angle_wrap(
+                    -float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0)
+                )
+                h_veh = _resolve_height(label_type, oid, towed_by, defaults)
+                if corrector is not None:
+                    _r = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)
+                    dims = (_r.length, _r.width, _r.height)
+                elif H is not None:
+                    lw = _footprint_from_homography(H, cx, cy, w_px, h_px, yaw_img, heading_world)
+                    dims = (lw[0], lw[1], h_veh)
+                else:
+                    dims = estimate_dims(label_type, w_px, h_px, oid)
+                geo_sizes.setdefault(oid, []).append(dims)
+        return {
+            oid: tuple(np.array(v).mean(axis=0).tolist())
+            for oid, v in geo_sizes.items()
+        }
+
+    size_avg: Dict[str, Tuple[float, float, float]] = _collect_all_dims() if stabilize_size else {}
+
     # ----------------------------
     # MCAP writing (patched)
     # ----------------------------
@@ -523,11 +726,17 @@ def convert_openlabel_to_omega(
     def _write_map(writer_mcap):
         if odr_path and os.path.isfile(odr_path):
             odr_xml = load_text(odr_path)
+            if strip_xodr_namespace:
+                odr_xml = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', "", odr_xml)
             try:
                 map_msg = betterosi.MapAsamOpenDrive(open_drive_xml_content=odr_xml)
             except TypeError:
                 map_msg = betterosi.MapAsamOpenDrive(content=odr_xml)
             writer_mcap.add(map_msg, topic="ground_truth_map", log_time=0)
+
+    # File-level GroundTruth fields, resolved once before the frame loop (mcap path only).
+    _gt_proj_string = None
+    _gt_country_code = 0
 
     def _write_ground_truth(writer_mcap, t_sec: float, total_nanos: int, moving_objects_osi: List[Any]):
         gt = betterosi.GroundTruth(
@@ -539,6 +748,10 @@ def convert_openlabel_to_omega(
             moving_object=moving_objects_osi,
             host_vehicle_id=betterosi.Identifier(value=0),
         )
+        if _gt_proj_string:
+            gt.proj_string = _gt_proj_string
+        if _gt_country_code:
+            gt.country_code = _gt_country_code
         # Provide log_time explicitly; readers often build indices from it. [4](https://ika-rwth-aachen.github.io/omega-prime/notebooks/tutorial/)[3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/convert_app.py)
         writer_mcap.add(gt, topic="ground_truth", log_time=total_nanos)
 
@@ -546,6 +759,9 @@ def convert_openlabel_to_omega(
     if write_mcap and betterosi is not None:
         mcap_path = f"{out_prefix}.mcap"
         os.makedirs(os.path.dirname(os.path.abspath(mcap_path)) or ".", exist_ok=True)
+
+        _gt_proj_string, _gt_lat, _gt_lon = _read_georef_geo(georef_data_path)
+        _gt_country_code = _resolve_country_code(country_code, _gt_lat, _gt_lon, _log)
 
         with betterosi.Writer(mcap_path) as writer_mcap:
             _write_map(writer_mcap)
@@ -563,20 +779,41 @@ def convert_openlabel_to_omega(
 
                 for oid, od in frame["objects"].items():
                     cx, cy, w_px, h_px, yaw_img = od["rbbox"]
-                    X, Y, Z = project_pixel_to_xyz(cx, cy)
                     idx = obj_name_to_idx.get(oid)
 
                     meta = objects_meta.get(oid, {})
                     label_type = meta.get("type", "other")
-                    type_code, type_name_upper = classify_openlabel_type(label_type)
-
-                    subtype_upper, role_upper = _object_meta(oid)
+                    type_code, type_name_upper, subtype_upper = mapper.classify(label_type)
+                    role_upper = normalize_role(meta.get("role"))
                     vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                     vr_code = vr_name_to_code.get(role_upper, vr_default)
 
-                    length, width, height = estimate_dims(label_type, w_px, h_px)
+                    heading_world = angle_wrap(-float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0))
+                    h_veh = _resolve_height(label_type, oid, towed_by, defaults)
+                    if corrector is not None:
+                        _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)
+                        X, Y = post_transform_xy(
+                            _res.x, _res.y,
+                            swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y,
+                            yaw_offset_rad=yaw_offset_rad, xy_offset=xy_offset,
+                        )
+                        Z = _res.z
+                        length, width, height = _res.length, _res.width, _res.height
+                    else:
+                        X, Y, Z = project_pixel_to_xyz(cx, cy)
+                        if H is not None:
+                            length, width = _footprint_from_homography(
+                                H, cx, cy, w_px, h_px, yaw_img, heading_world
+                            )
+                            height = h_veh
+                        else:
+                            length, width, height = estimate_dims(label_type, w_px, h_px, oid)
+
+                    if stabilize_size:
+                        length, width, height = size_avg.get(oid, (length, width, height))
+
                     vel, acc = compute_kinematics(idx, X, Y, Z)
-                    yaw = angle_wrap(float(yaw_img) + float(yaw_offset_rad))
+                    yaw = angle_wrap(heading_world + float(yaw_offset_rad))
 
                     csv_rows.append([
                         total_nanos, idx, X, Y, Z,
@@ -644,20 +881,41 @@ def convert_openlabel_to_omega(
 
             for oid, od in frame["objects"].items():
                 cx, cy, w_px, h_px, yaw_img = od["rbbox"]
-                X, Y, Z = project_pixel_to_xyz(cx, cy)
                 idx = obj_name_to_idx.get(oid)
 
                 meta = objects_meta.get(oid, {})
                 label_type = meta.get("type", "other")
-                type_code, type_name_upper = classify_openlabel_type(label_type)
-
-                subtype_upper, role_upper = _object_meta(oid)
+                type_code, type_name_upper, subtype_upper = mapper.classify(label_type)
+                role_upper = normalize_role(meta.get("role"))
                 vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                 vr_code = vr_name_to_code.get(role_upper, vr_default)
 
-                length, width, height = estimate_dims(label_type, w_px, h_px)
+                heading_world = angle_wrap(-float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0))
+                h_veh = _resolve_height(label_type, oid, towed_by, defaults)
+                if corrector is not None:
+                    _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)
+                    X, Y = post_transform_xy(
+                        _res.x, _res.y,
+                        swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y,
+                        yaw_offset_rad=yaw_offset_rad, xy_offset=xy_offset,
+                    )
+                    Z = _res.z
+                    length, width, height = _res.length, _res.width, _res.height
+                else:
+                    X, Y, Z = project_pixel_to_xyz(cx, cy)
+                    if H is not None:
+                        length, width = _footprint_from_homography(
+                            H, cx, cy, w_px, h_px, yaw_img, heading_world
+                        )
+                        height = h_veh
+                    else:
+                        length, width, height = estimate_dims(label_type, w_px, h_px, oid)
+
+                if stabilize_size:
+                    length, width, height = size_avg.get(oid, (length, width, height))
+
                 vel, acc = compute_kinematics(idx, X, Y, Z)
-                yaw = angle_wrap(float(yaw_img) + float(yaw_offset_rad))
+                yaw = angle_wrap(heading_world + float(yaw_offset_rad))
 
                 csv_rows.append([
                     total_nanos, idx, X, Y, Z,

@@ -68,6 +68,52 @@ cosmo convert scenario.json --run-name saro_roundabout -o runs/
 cosmo convert scenario.json --json -o runs/
 ```
 
+---
+
+## `cosmo correct`
+
+Pre-process an oblique-drone OpenLABEL file before conversion. Corrects perspective-distorted
+bboxes and optionally outputs world-frame cuboids. Use this when you want a corrected OpenLabel
+as an intermediate artefact (e.g. for inspection in the trajectory explorer).
+
+```bash
+cosmo correct input.json -o corrected.json \
+  --georef-data path/to/*_georef_data.json \
+  --flight-record path/to/FlightRecord_*.video_stats.json
+```
+
+### Output coordinate format (`--output-coords`)
+| Value | Effect |
+|---|---|
+| `pixel` (default) | Updates rbbox with corrected pixel coords |
+| `geo` | Replaces rbbox with world-frame cuboid (uses proj_string from georef) |
+| `both` | Updates rbbox AND adds cuboid |
+
+### Size stabilization
+`--stabilize-size` replaces per-frame L/W/H with the per-object mean across all frames.
+Also adds `size_std` and `size_deviation` vec entries to the OpenLabel output, which the
+trajectory explorer surfaces as a ΔL×W×H column and a size σ tooltip.
+
+### Correction modes
+- `--bbox-correction analytical` (default): fast homography-based
+- `--bbox-correction 3d`: ray-casting using the flight record camera model; requires `--flight-record`
+
+### Typical two-step workflow
+```bash
+cosmo correct input.json -o corrected.json \
+  --georef-data georef.json \
+  --flight-record video_stats.json \
+  --output-coords geo \
+  --stabilize-size
+
+cosmo convert corrected.json --georef-data georef.json -o runs/
+```
+
+> **Inline alternative:** `cosmo convert` also supports `--bbox-correction analytical|3d`
+> (with `--flight-record`) for single-step correction without producing an intermediate file.
+
+---
+
 ### cosmo calibrate
 Compute a calibration JSON (pixel→ground homography) into a per-run folder.
 #### Choose one input style (do not mix)

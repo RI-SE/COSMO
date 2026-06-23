@@ -22,7 +22,7 @@ COSMO converts **ASAM OpenLABEL** annotations into:
 
 ![COSMO main window](docs/images/screenshot_main_window.png)
 
- [!NOTE]
+> [!NOTE]
 > This is a beta version. Bugs and missing features should be expected. Github issues can be added for bug reports or feature requests.
 
 > Maintained by **RISE Research Institutes of Sweden**. Developed in the SYNERGIES project.
@@ -31,23 +31,31 @@ COSMO converts **ASAM OpenLABEL** annotations into:
 ## Documentation (quick links)
 - [Docs index](docs/README.md)
 - [Quickstart](docs/getting-started/quickstart.md)
-- [CLI](docs/user-guide/cli.md)
+- [CLI](docs/user_guide/cli.md)
 - [Outputs (CSV/MCAP)](docs/reference/outputs-omega-prime.md)
 - [Troubleshooting](docs/how-to/troubleshooting.md)
 ---
 ## Quick start (recommended: ORBIT georef)
 
-Install (editable + dev tools):
+Install (editable + dev tools). Recommended with **uv** (the project ships a `uv.lock`):
+```bash
+uv sync --group dev          # or --all-groups for gui/mcap/plot/etc.
+```
+
+With **pip** (≥ 25.1, which understands `[dependency-groups]`):
 ```bash
 python -m pip install -U pip
-python -m pip install -e ".[dev]"
+python -m pip install -e . --group dev
 ```
-(CI installs COSMO using this method.)
+> Note: `[dependency-groups]` (dev, gui, mcap, …) are not pip *extras*, so
+> `pip install -e ".[dev]"` does **not** work. CI installs the base package plus
+> tools explicitly: `pip install -e . pytest ruff` (adding `betterosi mcap` for
+> MCAP integration tests).
 
 > Tip 1: The **GUI** is launced with `cosmo` or `cosmo gui`.
 > Tip 2: During development with downloaded repro, all `cosmo` commands can be replaced with `python run_cosmo.py ...`, `cosmo.cmd ...` or `cosmo.ps1 ...`. `python run_gui.py` always starts the **GUI**.
 
-Convert using ORBIT georef as the primary pixel→ground mapping (**Convert** tab in the **GUI**):
+Convert using [ORBIT](https://github.com/RI-SE/ORBIT) georef as the primary pixel→ground mapping (**Convert** tab in the **GUI**):
 
 ```bash
 cosmo convert scenario.json \
@@ -83,25 +91,64 @@ cosmo convert scenario.json \
   -o runs/
 ```
 ---
+## Optional preprocessing: correct oblique-drone bboxes
+
+For footage from an oblique (tilted) drone camera, object bounding boxes are
+geometrically distorted. `cosmo correct` rewrites an OpenLABEL file into a
+corrected OpenLABEL file before conversion:
+
+```bash
+cosmo correct scenario.json \
+  --georef-data path/to/*_georef_data.json \
+  --flight-record path/to/FlightRecord_*.video_stats.json \
+  -o scenario_corrected.json
+```
+
+Then feed the corrected file to `cosmo convert`. Key options:
+- `--georef-data` / `--calibration`: pixel→ground mapping (one is required).
+- `--flight-record` (required): drone/camera pose per frame.
+- `--bbox-correction {analytical,3d}`: correction mode (default: analytical).
+- `--output-coords {pixel,geo,both}`: corrected pixel rbbox (default), world cuboid, or both.
+- `--stabilize-size`: replace per-frame dimensions with the per-object average.
+
+---
+## Trajectory explorer (visual inspection)
+
+`trajectory-explorer` is a standalone Qt viewer for inspecting and comparing
+object trajectories over an OpenDRIVE map. It loads up to three sources at once
+(CSV, MCAP, or OpenLABEL JSON), so you can compare e.g. raw vs corrected output.
+
+```bash
+trajectory-explorer \
+  --xodr path/to/map.xodr \
+  --a runs/<run>/outputs/<base_name>.csv \
+  --b path/to/scenario_corrected.json
+```
+
+It needs the GUI dependencies (PyQt5); install its dependency group with
+`uv sync --group trajectory-explorer`. Slots `--a/--b/--c` each accept a
+`.csv`, `.mcap`, or `.json` file.
+
+---
 ## Documentation (start here)
 
-* 📌 Docs index: docs/README.md
+* 📌 [Docs index](docs/README.md)
 * Getting started:
-  - docs/getting-started/installation.md
-  - docs/getting-started/quickstart.md
+  - [Quickstart](docs/getting-started/quickstart.md)
 * User guide:
-  - docs/user-guide/cli.md
-  - docs/user-guide/workflow.md
+  - [CLI reference](docs/user_guide/cli.md)
+  - [Workflow overview](docs/user_guide/workflow.md)
 * How-to:
-  - docs/how-to/orbit-georef.md
-  - docs/how-to/calibration.md
-  - docs/how-to/troubleshooting.md
+  - [Create and use calibration](docs/how-to/calibration.md)
+  - [Troubleshooting](docs/how-to/troubleshooting.md)
 * Reference:
-
-  - docs/reference/inputs-openlabel.md
-  - docs/reference/inputs-opendrive.md
-  - docs/reference/outputs-omega-prime.md
-  - docs/reference/osi-mcap.md
+  - [OpenLABEL input](docs/reference/inputs-openlabel.md)
+  - [OpenDRIVE input](docs/reference/inputs-opendrive.md)
+  - [Outputs (CSV/MCAP)](docs/reference/outputs-omega-prime.md)
+  - [OSI/MCAP topics](docs/reference/osi-mcap.md)
+* Developer guide:
+  - [Georef pipeline](docs/developer_guide/georef-pipeline.md)
+  - [Testing](docs/developer_guide/tests.md)
 
 ---
 
@@ -110,14 +157,14 @@ cosmo convert scenario.json \
 * MCAP output requires betterosi. If MCAP is requested but betterosi is missing, COSMO logs that it will write CSV only.
 * MCAP topics written:
   - ground_truth_map (OpenDRIVE, if provided)
-  - ground_truth (OSI GroundTruth per frame) [risecloud-...epoint.com]
+  - ground_truth (OSI GroundTruth per frame)
 
 ---
 
 ## Status and License
 
 - Beta.
-- ORBIT is licensed under the [GNU General Public License v3.0 (GPL-3.0)](LICENSE).
+- COSMO is licensed under the [GNU General Public License v3.0 (GPL-3.0)](LICENSE).
 
 ## Acknowledgement
 <br><div align="center">
