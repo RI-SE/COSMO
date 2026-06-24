@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from cosmo.converters.openlabel_to_omega import (
-    convert_openlabel_to_omega,  # [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+    convert_openlabel_to_omega,  #
 )
 
 
@@ -37,7 +37,7 @@ def _try_read_mcap_topics(mcap_path: Path) -> set[str]:
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not _has_betterosi(), reason="betterosi not installed; MCAP integration test skipped")  # [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+@pytest.mark.skipif(not _has_betterosi(), reason="betterosi not installed; MCAP integration test skipped")  #
 def test_converter_writes_mcap_with_ground_truth_and_map(tmp_path: Path):
     # Minimal OpenLABEL with two frames (ensures multiple GT messages)
     openlabel = {
@@ -67,7 +67,7 @@ def test_converter_writes_mcap_with_ground_truth_and_map(tmp_path: Path):
         encoding="utf-8",
     )
 
-    # Provide OpenDRIVE so map embedding path is exercised (ground_truth_map topic) [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+    # Provide OpenDRIVE so map embedding path is exercised (ground_truth_map topic)
     odr_path = tmp_path / "map.xodr"
     odr_path.write_text("<OpenDRIVE></OpenDRIVE>", encoding="utf-8")
 
@@ -82,7 +82,7 @@ def test_converter_writes_mcap_with_ground_truth_and_map(tmp_path: Path):
         georef_data_path=None,
         fps_arg=None,
         write_csv=False,   # focus on MCAP in this integration test
-        write_mcap=True,   # requires betterosi [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+        write_mcap=True,   # requires betterosi
         swap_xy=False,
         flip_x=False,
         flip_y=False,
@@ -98,6 +98,6 @@ def test_converter_writes_mcap_with_ground_truth_and_map(tmp_path: Path):
     # Optional deeper validation if the `mcap` reader is installed:
     topics = _try_read_mcap_topics(mcap_path)
     if topics:
-        # Converter writes these topics without leading '/' [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+        # Converter writes these topics without leading '/'
         assert "ground_truth" in topics
         assert "ground_truth_map" in topics

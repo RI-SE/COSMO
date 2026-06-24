@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cosmo.converters.openlabel_to_omega import (  # [2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+from cosmo.converters.openlabel_to_omega import (  #
     convert_openlabel_to_omega,
     load_alignment,
     parse_openlabel,
@@ -82,7 +82,7 @@ def test_convert_openlabel_to_omega_writes_csv_only(tmp_path: Path):
         georef_data_path=None,
         fps_arg=None,
         write_csv=True,
-        write_mcap=False,  # ensure no betterosi dependency [2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+        write_mcap=False,  # ensure no betterosi dependency
         swap_xy=False,
         flip_x=False,
         flip_y=False,
@@ -96,11 +96,11 @@ def test_convert_openlabel_to_omega_writes_csv_only(tmp_path: Path):
 
     with csv_path.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        # Columns defined in module [2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+        # Columns defined in module
         for col in ("total_nanos", "idx", "x", "y", "yaw", "type_name", "subtype_name", "role_name"):
             assert col in (reader.fieldnames or [])
         rows = list(reader)
         assert len(rows) >= 2
-        # Ensure time is non-decreasing (rows are sorted by total_nanos) [2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+        # Ensure time is non-decreasing (rows are sorted by total_nanos)
         times = [int(r["total_nanos"]) for r in rows]
         assert times == sorted(times)

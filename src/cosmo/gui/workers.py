@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-# Qt binding selection (same preference order as your current GUI) [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/convert_openlabel_to_omega.py)
+# Qt binding selection (same preference order as your current GUI)
 try:
     from PyQt5 import QtCore
     _Signal = QtCore.pyqtSignal

@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-# Qt binding selection: PyQt5 → PySide6 → PyQt6 (same as your current GUI). [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/convert_openlabel_to_omega.py)
+# Qt binding selection: PyQt5 → PySide6 → PyQt6 (same as your current GUI).
 try:
     from PyQt5 import QtCore, QtGui, QtWidgets
     _QT_API = "PyQt5"

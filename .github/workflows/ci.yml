@@ -3,6 +3,10 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    # Run optional/heavier integration tests weekly and on demand.
+    - cron: "0 3 * * 1"
 
 jobs:
   test:

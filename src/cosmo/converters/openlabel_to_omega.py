@@ -721,7 +721,7 @@ def convert_openlabel_to_omega(
     # ----------------------------
     # IMPORTANT:
     # Use betterosi.Writer as a context manager to ensure MCAP footer/summary are finalized properly. [1](https://deepwiki.com/ika-rwth-aachen/omega-prime/3.1-loading-and-saving-recordings)[4](https://ika-rwth-aachen.github.io/omega-prime/notebooks/tutorial/)
-    # Also write topic names without leading "/" to match common omega-prime usage. [3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/convert_app.py)[2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+    # Also write topic names without leading "/" to match common omega-prime usage.
 
     def _write_map(writer_mcap):
         if odr_path and os.path.isfile(odr_path):
@@ -752,7 +752,7 @@ def convert_openlabel_to_omega(
             gt.proj_string = _gt_proj_string
         if _gt_country_code:
             gt.country_code = _gt_country_code
-        # Provide log_time explicitly; readers often build indices from it. [4](https://ika-rwth-aachen.github.io/omega-prime/notebooks/tutorial/)[3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/convert_app.py)
+        # Provide log_time explicitly; readers often build indices from it. [4](https://ika-rwth-aachen.github.io/omega-prime/notebooks/tutorial/)
         writer_mcap.add(gt, topic="ground_truth", log_time=total_nanos)
 
     # If MCAP enabled, write with context manager; else only build CSV rows
