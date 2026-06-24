@@ -20,4 +20,4 @@ def test_calibrate_rejects_mixed_input_styles(tmp_path: Path):
         cwd=tmp_path,
     )
     assert res.returncode != 0
-    assert "Mixed input styles detected" in (res.stderr + res.stdout)  # error text comes from argparse error [2](blob:https://www.microsoft365.com/c655cd7d-9ac4-4928-84e7-b9a8f04405bd)
+    assert "Mixed input styles detected" in (res.stderr + res.stdout)  # error text comes from argparse error

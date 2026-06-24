@@ -29,4 +29,4 @@ def test_convert_accepts_alignment_flags(tmp_path: Path):
          "--no-mcap", "--swap-xy", "--flip-x", "--flip-y", "--xy-offset", "1.0", "-2.0", "--yaw-offset-deg", "90"],
         cwd=tmp_path,
     )
-    assert res.returncode == 0  # should be accepted and run successfully [3](blob:https://www.microsoft365.com/3377b2c7-ce90-4a5f-bcf4-96fccf281101)
+    assert res.returncode == 0  # should be accepted and run successfully

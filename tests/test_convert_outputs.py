@@ -32,4 +32,4 @@ def test_convert_no_csv_reports_no_csv_path(tmp_path: Path):
     )
     assert res.returncode == 0
     payload = extract_json_from_stdout(res.stdout)
-    assert payload.get("csv_path") in (None, "", False)  # run_convert should reflect csv disabled [3](blob:https://www.microsoft365.com/3377b2c7-ce90-4a5f-bcf4-96fccf281101)
+    assert payload.get("csv_path") in (None, "", False)  # run_convert should reflect csv disabled

@@ -17,7 +17,7 @@ The calibration JSON is written as:
 Other helpful artifacts:
 - <base_name>_homography_fit_summary.json
 - <base_name>_homography_fit_residuals.png
-- <base_name>_overlay_markers_on_image.png (only if --image was supplied) 
+- <base_name>_overlay_markers_on_image.png (only if --image was supplied)
 
 ## Step 3 — Convert using calibration
 
@@ -31,4 +31,4 @@ cosmo convert scenario.json \
 If results look wrong, check the calibration run’s run_summary.json for:
 
 - RMSE and inlier count
-- notes about missing plots/overlays 
+- notes about missing plots/overlays

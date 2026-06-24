@@ -19,7 +19,7 @@ def run_cosmo(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]
     NOTE: Never call plain `cosmo` with no args in CI, because cosmo.cli.main defaults to GUI.
     """
     env = dict(os.environ)
-    env.setdefault("MPLBACKEND", "Agg")  # CI already sets this, but keep it deterministic. [1](blob:https://www.microsoft365.com/3377b2c7-ce90-4a5f-bcf4-96fccf281101)
+    env.setdefault("MPLBACKEND", "Agg")  # CI already sets this, but keep it deterministic.
 
     exe = shutil.which("cosmo")
     if exe:

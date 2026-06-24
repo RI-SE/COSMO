@@ -81,7 +81,7 @@ Calibration outputs are written to outputs/ as:
 - <base_name>_calibration.json
 - <base_name>_homography_fit_summary.json
 - <base_name>_homography_fit_residuals.png
-- <base_name>_overlay_markers_on_image.png (only if --image is provided) 
+- <base_name>_overlay_markers_on_image.png (only if --image is provided)
 
 Use the calibration file for conversion fallback:
 
