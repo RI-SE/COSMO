@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from cosmo.app.convert_app import (  # [3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+from cosmo.app.convert_app import (  #
     ConvertConfig,
     run_convert,
 )
@@ -20,7 +20,7 @@ def _has_betterosi() -> bool:
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not _has_betterosi(), reason="betterosi not installed; MCAP integration test skipped")  # [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+@pytest.mark.skipif(not _has_betterosi(), reason="betterosi not installed; MCAP integration test skipped")  #
 def test_run_convert_app_writes_mcap_and_sets_result_path(tmp_path: Path):
     # Minimal OpenLABEL
     openlabel = {
@@ -36,7 +36,7 @@ def test_run_convert_app_writes_mcap_and_sets_result_path(tmp_path: Path):
     calib_path = tmp_path / "Calibration.json"
     calib_path.write_text(json.dumps({"fps": 10.0, "homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}), encoding="utf-8")
 
-    # OpenDRIVE embedded flag in convert_app summary is based on cfg.opendrive [3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+    # OpenDRIVE embedded flag in convert_app summary is based on cfg.opendrive
     odr_path = tmp_path / "map.xodr"
     odr_path.write_text("<OpenDRIVE></OpenDRIVE>", encoding="utf-8")
 
@@ -51,14 +51,14 @@ def test_run_convert_app_writes_mcap_and_sets_result_path(tmp_path: Path):
         write_mcap=True,
         out_dir=str(runs_dir),
         run_name="int_mcap",
-    )  # config matches app layer [3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+    )  # config matches app layer
 
     result = run_convert(cfg, log_fn=None)
 
     assert Path(result.run_dir).exists()
     assert Path(result.outputs_dir).exists()
 
-    # convert_app only sets mcap_path if file exists [3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+    # convert_app only sets mcap_path if file exists
     assert result.mcap_path is not None
     assert Path(result.mcap_path).is_file()
     assert Path(result.mcap_path).stat().st_size > 0

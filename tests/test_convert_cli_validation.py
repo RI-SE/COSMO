@@ -16,4 +16,4 @@ def test_convert_rejects_positional_and_flag_input(tmp_path: Path):
         cwd=tmp_path,
     )
     assert res.returncode != 0
-    assert "Provide either a positional input OR --input/--openlabel" in (res.stderr + res.stdout)  # emitted by ap.error [3](blob:https://www.microsoft365.com/3377b2c7-ce90-4a5f-bcf4-96fccf281101)
+    assert "Provide either a positional input OR --input/--openlabel" in (res.stderr + res.stdout)  # emitted by ap.error

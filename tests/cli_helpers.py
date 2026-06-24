@@ -21,10 +21,10 @@ def run_cosmo(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]
     env.setdefault("MPLBACKEND", "Agg")
 
     if os.name == "nt":
-        cmd = [sys.executable, "-m", "cosmo.cli.main", *args]  # real entrypoint logic [3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)
+        cmd = [sys.executable, "-m", "cosmo.cli.main", *args]  # real entrypoint logic
     else:
         exe = shutil.which("cosmo")
-        cmd = [exe, *args] if exe else [sys.executable, "-m", "cosmo.cli.main", *args]  # same entrypoint [3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)
+        cmd = [exe, *args] if exe else [sys.executable, "-m", "cosmo.cli.main", *args]  # same entrypoint
 
     return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, env=env)
 

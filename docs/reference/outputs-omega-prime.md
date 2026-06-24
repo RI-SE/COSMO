@@ -1,6 +1,6 @@
 # Outputs: Omega‑Prime CSV + OSI/MCAP
 
-COSMO writes all outputs inside a per-run folder under `runs/` by default. 
+COSMO writes all outputs inside a per-run folder under `runs/` by default.
 
 ---
 

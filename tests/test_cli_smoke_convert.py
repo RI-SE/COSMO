@@ -14,7 +14,7 @@ def test_cli_convert_smoke_csv_only(tmp_path: Path):
     Smoke test for the real CLI:
       cosmo convert --input openlabel.json --calibration Calibration.json --no-mcap --json
 
-    Uses flags from cosmo.cli.convert and disables MCAP for CI stability. [1](blob:https://www.microsoft365.com/3377b2c7-ce90-4a5f-bcf4-96fccf281101)
+    Uses flags from cosmo.cli.convert and disables MCAP for CI stability.
     """
     # Minimal OpenLABEL input (one object, one frame, rbbox)
     openlabel = {
@@ -64,7 +64,7 @@ def test_cli_convert_smoke_csv_only(tmp_path: Path):
             str(out_dir),
             "--run-name",
             "smoke_convert",
-            "--no-mcap",  # convert CLI uses BooleanOptionalAction; --no-mcap disables MCAP. [1](blob:https://www.microsoft365.com/3377b2c7-ce90-4a5f-bcf4-96fccf281101)
+            "--no-mcap",  # convert CLI uses BooleanOptionalAction; --no-mcap disables MCAP.
             "--json",
         ],
         cwd=tmp_path,

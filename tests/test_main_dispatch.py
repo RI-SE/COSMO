@@ -14,5 +14,5 @@ def test_main_version_works_without_gui():
         text=True,
         env={**os.environ, "MPLBACKEND": "Agg"},
     )
-    assert res.returncode == 0  # main.py returns 0 on --version [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)
-    assert res.stdout.strip()  # prints version string [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)
+    assert res.returncode == 0  # main.py returns 0 on --version
+    assert res.stdout.strip()  # prints version string

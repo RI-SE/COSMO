@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cosmo.app.calibrate_app import (  # app layer API [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/calibrate_app.py)
+from cosmo.app.calibrate_app import (  # app layer API
     CalibrateConfig,
     run_calibrate,
 )
@@ -34,7 +34,7 @@ def test_run_calibrate_writes_stem_based_outputs(tmp_path: Path):
     opendrive = tmp_path / "map.xodr"
     opendrive.write_text("<OpenDRIVE></OpenDRIVE>", encoding="utf-8")
 
-    # Deterministic run folder: existing out_dir + run_name => out_dir/run_name [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/calibrate_app.py)
+    # Deterministic run folder: existing out_dir + run_name => out_dir/run_name
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
 
@@ -55,7 +55,7 @@ def test_run_calibrate_writes_stem_based_outputs(tmp_path: Path):
     )
 
     logs: list[str] = []
-    result = run_calibrate(cfg, log_fn=logs.append)  # same signature used by CLI [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/calibrate_app.py)
+    result = run_calibrate(cfg, log_fn=logs.append)  # same signature used by CLI
 
     run_dir = Path(result.run_dir)
     outputs_dir = Path(result.outputs_dir)
@@ -63,7 +63,7 @@ def test_run_calibrate_writes_stem_based_outputs(tmp_path: Path):
     assert outputs_dir == run_dir / "outputs"
     assert outputs_dir.exists()
 
-    # Output naming is stem-based: <base>_calibration.json etc. [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/calibrate_app.py)
+    # Output naming is stem-based: <base>_calibration.json etc.
     calib_path = Path(result.calibration_json_path)
     assert calib_path.is_file()
     assert calib_path.name.endswith("_calibration.json")
@@ -73,15 +73,15 @@ def test_run_calibrate_writes_stem_based_outputs(tmp_path: Path):
     H = calib["homography"]
     assert isinstance(H, list) and len(H) == 3 and all(len(r) == 3 for r in H)
 
-    # Summary JSON should be produced (unless compute/write changes) [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/calibrate_app.py)
+    # Summary JSON should be produced (unless compute/write changes)
     if result.summary_json_path:
         assert Path(result.summary_json_path).is_file()
 
-    # Residual plot is intended but can be None (matplotlib issues), so keep optional. [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/calibrate_app.py)
+    # Residual plot is intended but can be None (matplotlib issues), so keep optional.
     if result.residuals_png_path:
         assert Path(result.residuals_png_path).is_file()
 
-    # No overlay expected because image=None [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/calibrate_app.py)
+    # No overlay expected because image=None
     assert result.overlay_png_path is None
 
     # Some logging should occur (useful diagnostic)

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from cosmo.app.convert_app import (  # app layer [2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+from cosmo.app.convert_app import (  # app layer
     ConvertConfig,
     run_convert,
 )
@@ -62,7 +62,7 @@ def _count_topic_messages(mcap_path: Path, topic: str) -> int:
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not _has_betterosi(), reason="betterosi not installed; cannot write MCAP")  # converter depends on it [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+@pytest.mark.skipif(not _has_betterosi(), reason="betterosi not installed; cannot write MCAP")  # converter depends on it
 @pytest.mark.skipif(not has_mcap_reader(), reason="mcap reader not installed; cannot inspect MCAP")
 def test_mcap_gt_count_map_once_and_strictly_increasing_log_time(tmp_path: Path):
     # Create OpenLABEL with a known number of frames.
@@ -104,7 +104,7 @@ def test_mcap_gt_count_map_once_and_strictly_increasing_log_time(tmp_path: Path)
         encoding="utf-8",
     )
 
-    # OpenDRIVE included so map is embedded as `ground_truth_map` (written once with log_time=0) [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+    # OpenDRIVE included so map is embedded as `ground_truth_map` (written once with log_time=0)
     odr_path = tmp_path / "map.xodr"
     odr_path.write_text("<OpenDRIVE></OpenDRIVE>", encoding="utf-8")
 
@@ -119,10 +119,10 @@ def test_mcap_gt_count_map_once_and_strictly_increasing_log_time(tmp_path: Path)
         write_mcap=True,
         out_dir=str(runs_dir),
         run_name="mcap_gt_count",
-    )  # app layer writes into per-run outputs/ folder [2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+    )  # app layer writes into per-run outputs/ folder
 
     result = run_convert(cfg, log_fn=None)
-    assert result.mcap_path, "Expected mcap_path to be set when MCAP is written"  # app layer sets only if file exists [2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+    assert result.mcap_path, "Expected mcap_path to be set when MCAP is written"  # app layer sets only if file exists
 
     mcap_path = assert_mcap_nonempty(result.mcap_path)
 
@@ -130,11 +130,11 @@ def test_mcap_gt_count_map_once_and_strictly_increasing_log_time(tmp_path: Path)
     gt_times = _collect_topic_log_times(mcap_path, "ground_truth")
     assert len(gt_times) == len(frame_ids), f"Expected {len(frame_ids)} ground_truth messages, got {len(gt_times)}"
 
-    # 2) Map message written exactly once at log_time=0 (converter writes once) [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+    # 2) Map message written exactly once at log_time=0 (converter writes once)
     map_times = _collect_topic_log_times(mcap_path, "ground_truth_map")
     assert len(map_times) == 1, f"Expected exactly 1 ground_truth_map message, got {len(map_times)}"
     assert map_times[0] == 0, f"Expected ground_truth_map log_time=0, got {map_times[0]}"
 
-    # 3) GroundTruth log_time strictly increasing (converter uses log_time=total_nanos) [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/openlabel_to_omega.py)
+    # 3) GroundTruth log_time strictly increasing (converter uses log_time=total_nanos)
     assert gt_times == sorted(gt_times), f"ground_truth log_time not non-decreasing: {gt_times}"
     assert all(b > a for a, b in zip(gt_times, gt_times[1:])), f"ground_truth log_time not strictly increasing: {gt_times}"

@@ -52,8 +52,8 @@ python -m pip install -e . --group dev
 > tools explicitly: `pip install -e . pytest ruff` (adding `betterosi mcap` for
 > MCAP integration tests).
 
-> Tip 1: The **GUI** is launced with `cosmo` or `cosmo gui`.
-> Tip 2: During development with downloaded repro, all `cosmo` commands can be replaced with `python run_cosmo.py ...`, `cosmo.cmd ...` or `cosmo.ps1 ...`. `python run_gui.py` always starts the **GUI**.
+> Tip 1: The **GUI** is launched with `cosmo` or `cosmo gui`.
+> Tip 2: In headless environments, prefer explicit subcommands such as `cosmo convert ...` rather than plain `cosmo`, which may start the GUI.
 
 Convert using [ORBIT](https://github.com/RI-SE/ORBIT) georef as the primary pixel→ground mapping (**Convert** tab in the **GUI**):
 
@@ -81,7 +81,7 @@ Calibration outputs are written to outputs/ as:
 - <base_name>_calibration.json
 - <base_name>_homography_fit_summary.json
 - <base_name>_homography_fit_residuals.png
-- <base_name>_overlay_markers_on_image.png (only if --image is provided) 
+- <base_name>_overlay_markers_on_image.png (only if --image is provided)
 
 Use the calibration file for conversion fallback:
 

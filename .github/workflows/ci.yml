@@ -3,6 +3,10 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    # Run optional/heavier integration tests weekly and on demand.
+    - cron: "0 3 * * 1"
 
 jobs:
   test:
@@ -32,7 +36,7 @@ jobs:
         run: ruff check .
 
       # Optional but recommended: verifies console scripts + dispatch without launching GUI.
-      # NOTE: calling plain `cosmo` (no args) attempts to start the GUI by default. [2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)
+      # NOTE: calling plain `cosmo` (no args) attempts to start the GUI by default.
       - name: CLI sanity check (no GUI)
         run: |
           cosmo --version

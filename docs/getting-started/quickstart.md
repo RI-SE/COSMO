@@ -10,17 +10,16 @@ cosmo
 cosmo gui
 ```
 
-Development shortcut (either of):
+Use the installed console script:
 
 ```bash
-python run_gui.py # Start GUI
-python run_cosmo.py gui # Same behaviour as cosmo (when installed)
-cosmo.cmd gui # Same behaviour in Windows cmd termial as cosmo (when installed)
-cosmo.ps1 gui # Same behaviour in Windows PowerShell termial as cosmo (when installed)
+cosmo gui
+# or simply:
+cosmo
 ```
 ---
 ## CLI
-> During development `cosmo ...` can be replaced with `python run_cosmo ...`, `cosmo.exe ...` or `cosmo.ps1 ...` without needing to install cosmo, e.g., `python run_cosmo.py convert ...`. To install for development use `uv sync --group dev` or `pip install -e . --group dev`.
+> For development, install the package first (for example `uv sync --group dev` or `pip install -e . --group dev`) and then use the `cosmo ...` console script.
 ---
 ### Convert (recommended: ORBIT georef)
 

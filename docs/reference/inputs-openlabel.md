@@ -1,6 +1,6 @@
 # Input: OpenLABEL (expected structure)
 
-COSMO reads OpenLABEL JSON and extracts object metadata and per-frame rotated bounding boxes (rbbox). 
+COSMO reads OpenLABEL JSON and extracts object metadata and per-frame rotated bounding boxes (rbbox).
 
 ## Required content
 COSMO expects, per frame, objects that contain an `rbbox` with at least five values:

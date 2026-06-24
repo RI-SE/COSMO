@@ -50,19 +50,19 @@ def test_console_scripts_exist_and_help_works():
     assert cosmo_calibrate, "Expected 'cosmo-calibrate' on PATH or in venv bin dir after install."
     assert cosmo_gui, "Expected 'cosmo-gui' on PATH or in venv bin dir after install."
 
-    # Always safe: module entrypoint tests real main.py behavior. [3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)
+    # Always safe: module entrypoint tests real main.py behavior.
     res = _run([sys.executable, "-m", "cosmo.cli.main", "--version"])
     assert res.returncode == 0, f"cosmo --version failed.\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
     assert res.stdout.strip(), "cosmo --version produced no output."
 
-    # Dispatch help via main.py (convert/calibrate are subcommands). [3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)
+    # Dispatch help via main.py (convert/calibrate are subcommands).
     res = _run([sys.executable, "-m", "cosmo.cli.main", "convert", "--help"])
     assert res.returncode == 0, f"cosmo convert --help failed.\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
 
     res = _run([sys.executable, "-m", "cosmo.cli.main", "calibrate", "--help"])
     assert res.returncode == 0, f"cosmo calibrate --help failed.\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
 
-    # Direct entrypoints: run via module on Windows to avoid blocked .EXE shims. [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)[2](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)
+    # Direct entrypoints: run via module on Windows to avoid blocked .EXE shims.
     if os.name == "nt":
         res = _run([sys.executable, "-m", "cosmo.cli.convert", "--help"])
         assert res.returncode == 0, f"python -m cosmo.cli.convert --help failed.\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
@@ -76,4 +76,4 @@ def test_console_scripts_exist_and_help_works():
         res = _run([cosmo_calibrate, "--help"])
         assert res.returncode == 0, f"cosmo-calibrate --help failed.\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
 
-    # Do NOT execute cosmo-gui in tests: it launches GUI immediately and can fail headless. [3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)[3](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/main.py)
+    # Do NOT execute cosmo-gui in tests: it launches GUI immediately and can fail headless.

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from cosmo.calibration.compute import (  # [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+from cosmo.calibration.compute import (  #
     compute_calibration,
     write_calibration_outputs,
 )
@@ -75,7 +75,7 @@ def test_write_calibration_outputs_writes_expected_json_schema(tmp_path: Path):
         fps=30.0,
         image_width=3840,
         image_height=2160,
-        residuals_png_path=str(resid_png),  # optional; may become None on plot errors [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+        residuals_png_path=str(resid_png),  # optional; may become None on plot errors
         overlay_png_path=None,
         image_path=None,
         openlabel_path=None,
@@ -85,7 +85,7 @@ def test_write_calibration_outputs_writes_expected_json_schema(tmp_path: Path):
     assert Path(outs.summary_json_path).is_file()
 
     calib = json.loads(Path(outs.calibration_json_path).read_text(encoding="utf-8"))
-    # Required keys written by write_calibration_outputs [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+    # Required keys written by write_calibration_outputs
     for k in ("fps", "image_width", "image_height", "homography", "intrinsics", "extrinsics", "default_dimensions_m"):
         assert k in calib
     H = calib["homography"]
@@ -95,7 +95,7 @@ def test_write_calibration_outputs_writes_expected_json_schema(tmp_path: Path):
     for k in ("rmse_m", "inliers_count", "pairs_used", "pixel_points", "world_points_ENU_m", "homography"):
         assert k in summary
 
-    # Residual plot can be omitted if matplotlib errors; if present, ensure file exists [1](https://risecloud-my.sharepoint.com/personal/anders_thorsen_ri_se/Documents/Microsoft%20Copilot%20Chat%20Files/compute.py)
+    # Residual plot can be omitted if matplotlib errors; if present, ensure file exists
     if outs.residuals_png_path is not None:
         assert Path(outs.residuals_png_path).is_file()
 

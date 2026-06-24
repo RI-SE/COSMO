@@ -14,7 +14,7 @@ def test_cli_calibrate_smoke(tmp_path: Path):
     Smoke test for the real CLI:
       cosmo calibrate --inputs pixel_pairs.csv visual_markers.csv map.xodr --json
 
-    Uses --inputs style and --json output exactly as supported by cosmo.cli.calibrate. [3](blob:https://www.microsoft365.com/c655cd7d-9ac4-4928-84e7-b9a8f04405bd)
+    Uses --inputs style and --json output exactly as supported by cosmo.cli.calibrate.
     """
     # Minimal input CSVs
     pixel_pairs_csv = tmp_path / "pixel_pairs.csv"
@@ -39,7 +39,7 @@ p4,10.0,10.0
         encoding="utf-8",
     )
 
-    # Dummy OpenDRIVE file (required arg in CLI contract) [3](blob:https://www.microsoft365.com/c655cd7d-9ac4-4928-84e7-b9a8f04405bd)
+    # Dummy OpenDRIVE file (required arg in CLI contract)
     odr_path = tmp_path / "map.xodr"
     odr_path.write_text("<OpenDRIVE></OpenDRIVE>", encoding="utf-8")
 
@@ -78,7 +78,7 @@ p4,10.0,10.0
 
     payload = extract_json_from_stdout(res.stdout)
 
-    # CLI prints asdict(result) when --json is provided. [3](blob:https://www.microsoft365.com/c655cd7d-9ac4-4928-84e7-b9a8f04405bd)
+    # CLI prints asdict(result) when --json is provided.
     run_dir = Path(payload["run_dir"])
     outputs_dir = Path(payload.get("outputs_dir") or payload["run_dir"])
     calib_path = Path(payload["calibration_json_path"])

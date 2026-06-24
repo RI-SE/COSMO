@@ -61,7 +61,7 @@ cosmo convert scenario.json \
   --xy-offset 1.2 -0.5 \
   -o runs/
 ```
-Available flags: `--swap-xy`, `--flip-x`, `--flip-y`, `--xy-offset DX DY`, `--yaw-offset-deg DEG`. 
+Available flags: `--swap-xy`, `--flip-x`, `--flip-y`, `--xy-offset DX DY`, `--yaw-offset-deg DEG`.
 ### Run naming & JSON output
 ```bash
 cosmo convert scenario.json --run-name saro_roundabout -o runs/
@@ -144,7 +144,7 @@ cosmo calibrate --inputs pixel_pairs.csv visual_markers.csv map.xodr \
 
 ##### Useful knobs
 - --ransac-thresh-m (default 0.50) — RANSAC distance threshold in meters --fps,
-- --image-width, --image-height 
+- --image-width, --image-height
 
 ##### Calibration outputs
 Calibration writes stem-based files under outputs/:
@@ -152,5 +152,5 @@ Calibration writes stem-based files under outputs/:
 - <base_name>_calibration.json
 - <base_name>_homography_fit_summary.json
 - <base_name>_homography_fit_residuals.png
-- <base_name>_overlay_markers_on_image.png (only if --image is provided) 
+- <base_name>_overlay_markers_on_image.png (only if --image is provided)
 
