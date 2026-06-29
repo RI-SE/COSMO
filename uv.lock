@@ -470,6 +470,7 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "orbit-georef" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pillow" },
@@ -530,6 +531,7 @@ requires-dist = [
     { name = "dataprov" },
     { name = "matplotlib" },
     { name = "numpy" },
+    { name = "orbit-georef", editable = "../ORBIT/orbit-georef" },
     { name = "pandas" },
     { name = "pillow" },
     { name = "pycountry" },
@@ -1953,6 +1955,26 @@ sdist = { url = "https://files.pythonhosted.org/packages/88/0a/459861c42d9591676
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/43/8e03427e0b8ca8db3af3cb2df5cdf079c1fa43b47b3765de7d27a4fde087/omega_prime-0.3.0-py3-none-any.whl", hash = "sha256:f003f452c734cd9c1cd7573d48772ad7ed546f88570e14a517fcac4ffa897f9d", size = 60612, upload-time = "2026-03-20T10:03:14.63Z" },
 ]
+
+[[package]]
+name = "orbit-georef"
+version = "0.1.0"
+source = { editable = "../ORBIT/orbit-georef" }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pyproj", version = "3.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=1.20.0" },
+    { name = "pyproj", specifier = ">=3.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "packaging"

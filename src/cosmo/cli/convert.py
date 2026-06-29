@@ -141,6 +141,11 @@ Examples:
                     help="ISO 3166-1 numeric country code (e.g. 752=Sweden); "
                          "auto-derived from georef lat/lon if omitted.")
 
+    ap.add_argument("--object-frame", choices=["global", "local"], default="global",
+                    help="Object coordinate frame: 'global' = absolute proj_string CRS "
+                         "(default); 'local' = map-local, shifted by the OpenDRIVE header "
+                         "<offset> and recorded in OSI proj_frame_offset (requires --odr).")
+
     # Run folder naming
     ap.add_argument("--run-name", required=False, help="Optional override for run folder name")
 
@@ -279,6 +284,7 @@ def main(argv=None) -> int:
         output_prefix=getattr(args, "output_prefix", None),
         stabilize_size=args.stabilize_size,
         country_code=args.country_code,
+        object_frame=args.object_frame,
     )
 
     def _log(line: str) -> None:

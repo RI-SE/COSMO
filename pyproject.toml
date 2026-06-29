@@ -8,7 +8,7 @@ version = "0.4.1"
 description = "COSMO conversion tools (OpenLABEL -> OSI/MCAP + Omega-Prime CSV) with GUI"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy", "pandas", "pillow", "matplotlib", "dataprov", "reverse_geocoder", "pycountry", "orbit-georef"]
+dependencies = ["numpy", "pandas", "pillow", "matplotlib", "dataprov", "reverse_geocoder", "pycountry", "orbit-georef", "opendrive-map"]
 
 
 [dependency-groups]
@@ -25,6 +25,13 @@ docs       = ["mkdocs-material", "mkdocstrings[python]"]
 cosmo-cli            = [{include-group = "mcap"}, {include-group = "plot"}]
 cosmo-gui            = [{include-group = "gui"}, {include-group = "mcap"}, {include-group = "plot"}]
 trajectory-explorer  = [{include-group = "gui"}, {include-group = "mcap"}, {include-group = "ontology"}]
+
+# orbit-georef is an unpublished sibling package (in the ORBIT repo). Until it is
+# published to a registry / git, resolve it from its local path. Switch to a git
+# source once the standalone packages are pushed.
+[tool.uv.sources]
+orbit-georef = { path = "../ORBIT/orbit-georef", editable = true }
+opendrive-map = { path = "../ORBIT/opendrive-map", editable = true }
 
 [project.scripts]
 cosmo = "cosmo.cli.main:main"
