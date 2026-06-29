@@ -10,6 +10,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+
+# opendrive-map is the shared source of lane geometry (all primitives, full width
+# polynomials, laneOffset). The viewer draws in absolute UTM, so it adds the map
+# <offset> back to opendrive-map's local coordinates.
+import opendrive_map as odm
 import pandas as pd
 
 try:
@@ -324,65 +329,36 @@ def _sample_road(road: Road) -> list[tuple[float, float, float, float]]:
 
 
 # ---------------------------------------------------------------------------
-# Lane polygon building
+# Lane polygons + centerlines (from the shared opendrive-map library)
 # ---------------------------------------------------------------------------
 
-def _lane_width_at(lane: Lane, s_rel: float) -> float:
-    """Evaluate lane width polynomial at s_rel from lane section start."""
-    best_w = LaneWidth(0, 0, 0, 0, 0)
-    for w in lane.widths:
-        if w.sOffset <= s_rel:
-            best_w = w
-    ds = s_rel - best_w.sOffset
-    return best_w.a + best_w.b * ds + best_w.c * ds**2 + best_w.d * ds**3
-
-
-def build_lane_polygons(road: Road) -> list[tuple[int, list[tuple[float, float]]]]:
-    """Return list of (lane_id, [(x,y), ...]) closed polygons."""
-    samples = _sample_road(road)
-    if not samples:
+def _poly_exterior_xy(poly, ox: float, oy: float) -> list[tuple[float, float]]:
+    """Absolute (x+offset) exterior ring of a shapely polygon (largest part if multi)."""
+    if poly.is_empty:
         return []
+    geom = poly if poly.geom_type == "Polygon" else max(poly.geoms, key=lambda g: g.area)
+    return [(x + ox, y + oy) for x, y in geom.exterior.coords]
 
-    polygons: list[tuple[int, list[tuple[float, float]]]] = []
 
-    for ls_idx, ls in enumerate(road.lane_sections):
-        s_start = ls.s
-        s_end = road.lane_sections[ls_idx + 1].s if ls_idx + 1 < len(road.lane_sections) else road.length
+def map_geometry_from_xodr(path: str | None = None, text: str | None = None):
+    """Return (lane_polys, centerlines) in absolute UTM via opendrive-map.
 
-        sec_samples = [(s, x, y, h) for s, x, y, h in samples if s_start <= s <= s_end + 0.01]
-        if not sec_samples:
-            continue
-
-        for lane in ls.lanes:
-            if lane.id == 0:
-                continue
-            is_right = lane.id < 0
-            perp_sign = -1 if is_right else 1
-
-            same_side = [ln for ln in ls.lanes if (ln.id < 0) == is_right and ln.id != 0]
-            same_side.sort(key=lambda ln: abs(ln.id))
-            this_rank = abs(lane.id)
-            inner_lanes = [ln for ln in same_side if abs(ln.id) < this_rank]
-
-            inner_pts: list[tuple[float, float]] = []
-            outer_pts: list[tuple[float, float]] = []
-
-            for s, x, y, hdg in sec_samples:
-                s_rel = s - s_start
-                perp_dir = hdg + perp_sign * math.pi / 2
-                d_inner = sum(_lane_width_at(ln, s_rel) for ln in inner_lanes)
-                d_outer = d_inner + _lane_width_at(lane, s_rel)
-                xi = x + d_inner * math.cos(perp_dir)
-                yi = y + d_inner * math.sin(perp_dir)
-                xo = x + d_outer * math.cos(perp_dir)
-                yo = y + d_outer * math.sin(perp_dir)
-                inner_pts.append((xi, yi))
-                outer_pts.append((xo, yo))
-
-            poly = inner_pts + list(reversed(outer_pts))
-            polygons.append((lane.id, poly))
-
-    return polygons
+    lane_polys: list of (lane_id, [(x, y), ...]); centerlines: list of [(x, y), ...].
+    """
+    if path:
+        net = odm.RoadNetwork.from_file(path)
+    elif text:
+        net = odm.RoadNetwork.from_text(text)
+    else:
+        return [], []
+    ox, oy, _ = net.offset
+    lane_polys = [(ln.lane_id, _poly_exterior_xy(ln.polygon, ox, oy)) for ln in net.lanes]
+    lane_polys = [(lid, pts) for lid, pts in lane_polys if pts]
+    centerlines = [
+        [(x + ox, y + oy) for _s, x, y, _h in odm.sample_reference_line(road, 0.5)]
+        for road in net.roads
+    ]
+    return lane_polys, centerlines
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +455,14 @@ def load_from_mcap(path: str) -> tuple[str | None, dict[int, dict]]:
     for gt in betterosi.read(path, return_ground_truth=True, mcap_topics=["ground_truth"]):
         ts = gt.timestamp
         ts_nanos = int(ts.seconds) * 1_000_000_000 + int(ts.nanos)
+        # Normalise to absolute (proj_string CRS) so local-frame mcaps overlay the
+        # absolute map: world = R(yaw)·osi + proj_frame_offset (offset absent => no-op).
+        pfo = getattr(gt, "proj_frame_offset", None)
+        ofx = ofy = 0.0
+        ccos, csin = 1.0, 0.0
+        if pfo is not None and getattr(pfo, "position", None) is not None:
+            ofx, ofy = pfo.position.x, pfo.position.y
+            ccos, csin = math.cos(pfo.yaw), math.sin(pfo.yaw)
         for mo in gt.moving_object:
             oid = int(mo.id.value)
             if oid not in obj_meta:
@@ -496,8 +480,8 @@ def load_from_mcap(path: str) -> tuple[str | None, dict[int, dict]]:
             b = mo.base
             obj_rows.setdefault(oid, []).append({
                 "total_nanos": ts_nanos,
-                "x": float(b.position.x),
-                "y": float(b.position.y),
+                "x": float(b.position.x) * ccos - float(b.position.y) * csin + ofx,
+                "y": float(b.position.x) * csin + float(b.position.y) * ccos + ofy,
                 "vel_x": float(b.velocity.x),
                 "vel_y": float(b.velocity.y),
                 "yaw": float(b.orientation.yaw),
@@ -678,7 +662,8 @@ class _LoadWorker(QtCore.QThread):
         self._cancelled = True
 
     def run(self) -> None:
-        result: dict = {"trajs_a": {}, "trajs_b": {}, "trajs_c": {}, "roads": [], "parking": []}
+        result: dict = {"trajs_a": {}, "trajs_b": {}, "trajs_c": {}, "roads": [], "parking": [],
+                        "lane_polys": [], "centerlines": []}
         xodr_xmls: list = []
         try:
             for slot in ("a", "b", "c"):
@@ -728,6 +713,14 @@ class _LoadWorker(QtCore.QThread):
 
             result["roads"] = roads
             result["parking"] = parking
+            # Lane polygons + centerlines come from the shared opendrive-map library.
+            try:
+                if self._xodr_path:
+                    result["lane_polys"], result["centerlines"] = map_geometry_from_xodr(path=self._xodr_path)
+                elif xodr_xmls:
+                    result["lane_polys"], result["centerlines"] = map_geometry_from_xodr(text=xodr_xmls[0])
+            except Exception as exc:
+                print(f"Warning: opendrive-map geometry failed: {exc}")
             if not self._cancelled:
                 self.done.emit(result)
         except Exception as exc:
@@ -785,7 +778,8 @@ def _add_traj_paths(
 
 def build_scene(
     scene: QtWidgets.QGraphicsScene,
-    roads: list[Road],
+    lane_polys: list[tuple[int, list[tuple[float, float]]]],
+    centerlines: list[list[tuple[float, float]]],
     parking: list[ParkingObject],
     road_map: dict[str, Road],
     trajectories: dict[int, dict],
@@ -794,25 +788,23 @@ def build_scene(
 ) -> dict[int, QtWidgets.QGraphicsPathItem]:
     no_pen = QtGui.QPen(QtCore.Qt.NoPen if hasattr(QtCore.Qt, "NoPen") else QtCore.Qt.PenStyle.NoPen)
 
-    # 1. Lane polygons
-    for road in roads:
-        for lane_id, poly in build_lane_polygons(road):
-            if lane_id < 0:
-                brush = QtGui.QBrush(QtGui.QColor(0, 180, 0, 80))
-            else:
-                brush = QtGui.QBrush(QtGui.QColor(0, 0, 200, 80))
-            scene.addPolygon(_qpoly(poly), no_pen, brush)
+    # 1. Lane polygons (absolute UTM, from opendrive-map)
+    for lane_id, poly in lane_polys:
+        if lane_id < 0:
+            brush = QtGui.QBrush(QtGui.QColor(0, 180, 0, 80))
+        else:
+            brush = QtGui.QBrush(QtGui.QColor(0, 0, 200, 80))
+        scene.addPolygon(_qpoly(poly), no_pen, brush)
 
-    # 2. Centerlines
+    # 2. Centerlines (road reference lines, absolute UTM)
     center_pen = QtGui.QPen(QtGui.QColor(0, 0, 0))
     center_pen.setWidthF(0.15)
-    for road in roads:
-        samples = _sample_road(road)
+    for samples in centerlines:
         if len(samples) < 2:
             continue
         path = QtGui.QPainterPath()
-        path.moveTo(samples[0][1], -samples[0][2])
-        for _, x, y, _ in samples[1:]:
+        path.moveTo(samples[0][0], -samples[0][1])
+        for x, y in samples[1:]:
             path.lineTo(x, -y)
         scene.addPath(path, center_pen)
 
@@ -1106,7 +1098,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             raise ValueError(f"Unsupported file type: {path}")
 
     def _fit(self):
-        self.view.fitInView(self.scene.sceneRect(), _keep_aspect_ratio())
+        self.view.fitInView(self.scene.itemsBoundingRect(), _keep_aspect_ratio())
 
     def _wheel_zoom(self, event):
         try:
@@ -1134,6 +1126,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._play_timer.stop()
         self._btn_play.setText("▶")
         self.scene.clear()
+        self.scene.setSceneRect(QtCore.QRectF())  # let the rect recompute from new items
         self._traj_items_a = {}
         self._traj_items_b = {}
         self._traj_items_c = {}
@@ -1218,7 +1211,13 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             except Exception:
                 pass
             self._progress_dlg.close()
+        # Show the error on a clean scene and frame it, so it is visible regardless of
+        # the previous view transform and does not pollute the next load's scene rect.
+        self.scene.clear()
+        self.scene.setSceneRect(QtCore.QRectF())
         self.scene.addText(f"Error loading: {msg}")
+        self.scene.setSceneRect(self.scene.itemsBoundingRect())
+        self.view.fitInView(self.scene.itemsBoundingRect(), _keep_aspect_ratio())
 
     def _on_load_done(self, result: dict) -> None:
         self._trajs_a = result["trajs_a"]
@@ -1226,7 +1225,8 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._trajs_c = result["trajs_c"]
         if hasattr(self, "_load_label"):
             self._load_label.setText("Building scene…")
-        self._rebuild_ui_and_scene(result["roads"], result["parking"])
+        self._rebuild_ui_and_scene(result["roads"], result["parking"],
+                                   result["lane_polys"], result["centerlines"])
         if hasattr(self, "_progress_dlg"):
             try:
                 self._progress_dlg.finished.disconnect(self._on_load_cancel)
@@ -1234,7 +1234,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
                 pass
             self._progress_dlg.close()
 
-    def _rebuild_ui_and_scene(self, roads, parking) -> None:
+    def _rebuild_ui_and_scene(self, roads, parking, lane_polys, centerlines) -> None:
         all_ids = set(self._trajs_a) | set(self._trajs_b) | set(self._trajs_c)
         self._obj_colors = _build_obj_colors(all_ids)
         self._build_type_subtype_objs()
@@ -1256,7 +1256,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         road_map = {r.id: r for r in roads}
 
         self._traj_items_a = build_scene(
-            self.scene, roads, parking, road_map,
+            self.scene, lane_polys, centerlines, parking, road_map,
             self._trajs_a, self._obj_colors, path_alpha=path_alpha,
         )
         if self._trajs_b:
@@ -1282,6 +1282,10 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             self._slider.setValue(0)
             self._update_frame(0)
 
+        # Reset the scene rect to the current items: QGraphicsScene.sceneRect() only
+        # grows (never shrinks), so after a clear+reload a stale rect would make
+        # fitInView zoom past the new content and show nothing.
+        self.scene.setSceneRect(self.scene.itemsBoundingRect())
         self.view.fitInView(self.scene.sceneRect(), _keep_aspect_ratio())
 
     def _build_type_subtype_objs(self) -> None:
