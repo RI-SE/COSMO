@@ -532,8 +532,8 @@ requires-dist = [
     { name = "dataprov" },
     { name = "matplotlib" },
     { name = "numpy" },
-    { name = "opendrive-map", editable = "../ORBIT/opendrive-map" },
-    { name = "orbit-georef", editable = "../ORBIT/orbit-georef" },
+    { name = "opendrive-map", git = "https://github.com/RI-SE/ORBIT.git?subdirectory=opendrive-map&tag=opendrive-map-v0.1.0" },
+    { name = "orbit-georef", git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&tag=orbit-georef-v0.1.2" },
     { name = "pandas" },
     { name = "pillow" },
     { name = "pycountry" },
@@ -1961,7 +1961,7 @@ wheels = [
 [[package]]
 name = "opendrive-map"
 version = "0.1.0"
-source = { editable = "../ORBIT/opendrive-map" }
+source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=opendrive-map&tag=opendrive-map-v0.1.0#5e5b0d1ba63d6553bc787fe3b0ecfbcd6c4a70cd" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -1970,34 +1970,16 @@ dependencies = [
     { name = "shapely" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "numpy", specifier = ">=1.20.0" },
-    { name = "pyproj", specifier = ">=3.0.0" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "shapely", specifier = ">=2.0" },
-]
-provides-extras = ["dev"]
-
 [[package]]
 name = "orbit-georef"
-version = "0.1.0"
-source = { editable = "../ORBIT/orbit-georef" }
+version = "0.1.2"
+source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&tag=orbit-georef-v0.1.2#13007cc51bd002c55fd60352d1ad54130fb2fcba" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pyproj", version = "3.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "numpy", specifier = ">=1.20.0" },
-    { name = "pyproj", specifier = ">=3.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "packaging"
