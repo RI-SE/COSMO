@@ -39,6 +39,12 @@ try:
 except ImportError:  # pragma: no cover
     betterosi = None
 
+# orbit-georef owns the ORBIT georef JSON format + pixel→ground transform.
+try:
+    from orbit_georef import GeoTransformer
+except ImportError:  # pragma: no cover
+    GeoTransformer = None
+
 from cosmo.converters.ontology_mapper import OntologyMapper
 
 # -----------------------------------------------------------------------------
@@ -308,7 +314,14 @@ def load_alignment(
                 f"Unsupported ORBIT georef transform_method='{georef.get('transform_method')}'. "
                 "Expected homography-style pixel->ground transform."
             )
-        if "transformation_matrix" in georef:
+        # orbit-georef owns the ORBIT georef format; use it for full exports and
+        # fall back to inline parsing for partial/legacy calibration-style files.
+        is_full_orbit_georef = all(
+            k in georef for k in ("transformation_matrix", "inverse_matrix", "reference_point")
+        )
+        if GeoTransformer is not None and georef_data_path and is_full_orbit_georef:
+            H = GeoTransformer.from_file(georef_data_path).transform_matrix
+        elif "transformation_matrix" in georef:
             H = np.array(georef["transformation_matrix"], dtype=np.float64)
         elif "homography" in georef:
             H = np.array(georef["homography"], dtype=np.float64)
