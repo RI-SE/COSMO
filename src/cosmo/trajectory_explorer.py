@@ -4,12 +4,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import re
-import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+
+# opendrive-map is the shared source of lane geometry (all primitives, full width
+# polynomials, laneOffset). The viewer draws in absolute UTM, so it adds the map
+# <offset> back to opendrive-map's local coordinates.
+import opendrive_map as odm
 import pandas as pd
 
 try:
@@ -141,280 +143,38 @@ def _fmt_dims(dims: tuple[float, float, float] | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Data structures
+# Lane polygons + centerlines (from the shared opendrive-map library)
 # ---------------------------------------------------------------------------
 
-@dataclass
-class GeomSegment:
-    s: float
-    x: float
-    y: float
-    hdg: float
-    length: float
-    kind: str  # "line" or "paramPoly3"
-    poly3_params: dict = field(default_factory=dict)
-
-
-@dataclass
-class LaneWidth:
-    sOffset: float
-    a: float
-    b: float
-    c: float
-    d: float
-
-
-@dataclass
-class Lane:
-    id: int
-    widths: list[LaneWidth]
-
-
-@dataclass
-class LaneSection:
-    s: float
-    lanes: list[Lane]
-
-
-@dataclass
-class Road:
-    id: str
-    length: float
-    geom_segments: list[GeomSegment]
-    lane_sections: list[LaneSection]
-
-
-@dataclass
-class ParkingObject:
-    road_id: str
-    s: float
-    t: float
-    hdg: float
-    width: float
-    length: float
-    outline_corners: list[tuple[float, float]] = field(default_factory=list)  # (u, v) local coords
-
-
-# ---------------------------------------------------------------------------
-# XODR parsing
-# ---------------------------------------------------------------------------
-
-def parse_xodr(path: str) -> tuple[list[Road], list[ParkingObject], tuple[float, float]]:
-    return parse_xodr_text(open(path, encoding="utf-8").read())
-
-
-def parse_xodr_text(text: str) -> tuple[list[Road], list[ParkingObject], tuple[float, float]]:
-    text = re.sub(r'\s+xmlns="[^"]+"', "", text)
-    root = ET.fromstring(text)
-
-    offset_x, offset_y = 0.0, 0.0
-    header = root.find("header")
-    if header is not None:
-        off = header.find("offset")
-        if off is not None:
-            offset_x = float(off.get("x", 0.0))
-            offset_y = float(off.get("y", 0.0))
-
-    roads: list[Road] = []
-    parking: list[ParkingObject] = []
-
-    for road_el in root.findall("road"):
-        road_id = road_el.get("id", "")
-        length = float(road_el.get("length", 0))
-
-        geom_segments: list[GeomSegment] = []
-        for g in road_el.findall("./planView/geometry"):
-            s = float(g.get("s", 0))
-            x = float(g.get("x", 0)) + offset_x
-            y = float(g.get("y", 0)) + offset_y
-            hdg = float(g.get("hdg", 0))
-            seg_len = float(g.get("length", 0))
-            children = list(g)
-            kind = children[0].tag if children else "line"
-            params = children[0].attrib if children else {}
-            geom_segments.append(GeomSegment(s, x, y, hdg, seg_len, kind, params))
-
-        lane_sections: list[LaneSection] = []
-        for ls_el in road_el.findall("./lanes/laneSection"):
-            ls_s = float(ls_el.get("s", 0))
-            lanes: list[Lane] = []
-            for side in ("left", "right"):
-                side_el = ls_el.find(side)
-                if side_el is None:
-                    continue
-                for lane_el in side_el.findall("lane"):
-                    lid = int(lane_el.get("id", 0))
-                    widths = []
-                    for w_el in lane_el.findall("width"):
-                        widths.append(LaneWidth(
-                            sOffset=float(w_el.get("sOffset", 0)),
-                            a=float(w_el.get("a", 0)),
-                            b=float(w_el.get("b", 0)),
-                            c=float(w_el.get("c", 0)),
-                            d=float(w_el.get("d", 0)),
-                        ))
-                    lanes.append(Lane(id=lid, widths=widths))
-            lane_sections.append(LaneSection(s=ls_s, lanes=lanes))
-
-        for obj in road_el.findall("./objects/object"):
-            if obj.get("type") == "parking":
-                corners = [
-                    (float(c.get("u", 0)), float(c.get("v", 0)))
-                    for c in obj.findall("./outline/cornerLocal")
-                ]
-                parking.append(ParkingObject(
-                    road_id=road_id,
-                    s=float(obj.get("s", 0)),
-                    t=float(obj.get("t", 0)),
-                    hdg=float(obj.get("hdg", 0)),
-                    width=float(obj.get("width", 2)),
-                    length=float(obj.get("length", 5)),
-                    outline_corners=corners,
-                ))
-
-        roads.append(Road(id=road_id, length=length,
-                          geom_segments=geom_segments,
-                          lane_sections=lane_sections))
-
-    return roads, parking, (offset_x, offset_y)
-
-
-# ---------------------------------------------------------------------------
-# Geometry sampling
-# ---------------------------------------------------------------------------
-
-def _sample_road(road: Road) -> list[tuple[float, float, float, float]]:
-    """Return [(s, x, y, hdg), ...] sampled along the road centerline."""
-    n_total = max(20, int(road.length / 0.5))
-    result: list[tuple[float, float, float, float]] = []
-
-    for seg in road.geom_segments:
-        if seg.length <= 0:
-            continue
-        n_seg = max(2, int(n_total * seg.length / road.length))
-        x0, y0, hdg0 = seg.x, seg.y, seg.hdg
-
-        for i in range(n_seg):
-            t = seg.length * i / (n_seg - 1)
-
-            if seg.kind == "paramPoly3":
-                p = seg.poly3_params
-                p_range = p.get("pRange", "normalized")
-                p_max = 1.0 if p_range == "normalized" else seg.length
-                p_val = p_max * t / seg.length
-                aU, bU = float(p.get("aU", 0)), float(p.get("bU", 0))
-                cU, dU = float(p.get("cU", 0)), float(p.get("dU", 0))
-                aV, bV = float(p.get("aV", 0)), float(p.get("bV", 0))
-                cV, dV = float(p.get("cV", 0)), float(p.get("dV", 0))
-                u = aU + bU * p_val + cU * p_val**2 + dU * p_val**3
-                v = aV + bV * p_val + cV * p_val**2 + dV * p_val**3
-                x = x0 + u * math.cos(hdg0) - v * math.sin(hdg0)
-                y = y0 + u * math.sin(hdg0) + v * math.cos(hdg0)
-                du = bU + 2 * cU * p_val + 3 * dU * p_val**2
-                dv = bV + 2 * cV * p_val + 3 * dV * p_val**2
-                hdg = hdg0 + math.atan2(dv, du) if (du**2 + dv**2) > 1e-12 else hdg0
-            else:  # line
-                x = x0 + t * math.cos(hdg0)
-                y = y0 + t * math.sin(hdg0)
-                hdg = hdg0
-
-            result.append((seg.s + t, x, y, hdg))
-
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Lane polygon building
-# ---------------------------------------------------------------------------
-
-def _lane_width_at(lane: Lane, s_rel: float) -> float:
-    """Evaluate lane width polynomial at s_rel from lane section start."""
-    best_w = LaneWidth(0, 0, 0, 0, 0)
-    for w in lane.widths:
-        if w.sOffset <= s_rel:
-            best_w = w
-    ds = s_rel - best_w.sOffset
-    return best_w.a + best_w.b * ds + best_w.c * ds**2 + best_w.d * ds**3
-
-
-def build_lane_polygons(road: Road) -> list[tuple[int, list[tuple[float, float]]]]:
-    """Return list of (lane_id, [(x,y), ...]) closed polygons."""
-    samples = _sample_road(road)
-    if not samples:
+def _poly_exterior_xy(poly, ox: float, oy: float) -> list[tuple[float, float]]:
+    """Absolute (x+offset) exterior ring of a shapely polygon (largest part if multi)."""
+    if poly.is_empty:
         return []
-
-    polygons: list[tuple[int, list[tuple[float, float]]]] = []
-
-    for ls_idx, ls in enumerate(road.lane_sections):
-        s_start = ls.s
-        s_end = road.lane_sections[ls_idx + 1].s if ls_idx + 1 < len(road.lane_sections) else road.length
-
-        sec_samples = [(s, x, y, h) for s, x, y, h in samples if s_start <= s <= s_end + 0.01]
-        if not sec_samples:
-            continue
-
-        for lane in ls.lanes:
-            if lane.id == 0:
-                continue
-            is_right = lane.id < 0
-            perp_sign = -1 if is_right else 1
-
-            same_side = [ln for ln in ls.lanes if (ln.id < 0) == is_right and ln.id != 0]
-            same_side.sort(key=lambda ln: abs(ln.id))
-            this_rank = abs(lane.id)
-            inner_lanes = [ln for ln in same_side if abs(ln.id) < this_rank]
-
-            inner_pts: list[tuple[float, float]] = []
-            outer_pts: list[tuple[float, float]] = []
-
-            for s, x, y, hdg in sec_samples:
-                s_rel = s - s_start
-                perp_dir = hdg + perp_sign * math.pi / 2
-                d_inner = sum(_lane_width_at(ln, s_rel) for ln in inner_lanes)
-                d_outer = d_inner + _lane_width_at(lane, s_rel)
-                xi = x + d_inner * math.cos(perp_dir)
-                yi = y + d_inner * math.sin(perp_dir)
-                xo = x + d_outer * math.cos(perp_dir)
-                yo = y + d_outer * math.sin(perp_dir)
-                inner_pts.append((xi, yi))
-                outer_pts.append((xo, yo))
-
-            poly = inner_pts + list(reversed(outer_pts))
-            polygons.append((lane.id, poly))
-
-    return polygons
+    geom = poly if poly.geom_type == "Polygon" else max(poly.geoms, key=lambda g: g.area)
+    return [(x + ox, y + oy) for x, y in geom.exterior.coords]
 
 
-# ---------------------------------------------------------------------------
-# Parking rectangle
-# ---------------------------------------------------------------------------
+def map_geometry_from_xodr(path: str | None = None, text: str | None = None):
+    """Return (lane_polys, centerlines, parking_polys) in absolute UTM via opendrive-map.
 
-def build_parking_rect(obj: ParkingObject, road: Road) -> list[tuple[float, float]]:
-    samples = _sample_road(road)
-    if not samples:
-        return []
-
-    s_arr = np.array([s for s, *_ in samples])
-    idx = int(np.searchsorted(s_arr, obj.s))
-    idx = min(max(idx, 0), len(samples) - 1)
-    _, rx, ry, rhdg = samples[idx]
-
-    perp = rhdg + math.pi / 2
-    cx = rx + obj.t * math.cos(perp)
-    cy = ry + obj.t * math.sin(perp)
-
-    obj_hdg = rhdg + obj.hdg
-    if obj.outline_corners:
-        corners_local = obj.outline_corners
+    lane_polys: list of (lane_id, [(x, y), ...]); centerlines/parking_polys: list of [(x, y), ...].
+    """
+    if path:
+        net = odm.RoadNetwork.from_file(path)
+    elif text:
+        net = odm.RoadNetwork.from_text(text)
     else:
-        hl, hw = obj.length / 2, obj.width / 2
-        corners_local = [(-hl, -hw), (hl, -hw), (hl, hw), (-hl, hw)]
-    result = []
-    for u, v in corners_local:
-        wx = cx + u * math.cos(obj_hdg) - v * math.sin(obj_hdg)
-        wy = cy + u * math.sin(obj_hdg) + v * math.cos(obj_hdg)
-        result.append((wx, wy))
-    return result
+        return [], [], []
+    ox, oy, _ = net.offset
+    lane_polys = [(ln.lane_id, _poly_exterior_xy(ln.polygon, ox, oy)) for ln in net.lanes]
+    lane_polys = [(lid, pts) for lid, pts in lane_polys if pts]
+    centerlines = [
+        [(x + ox, y + oy) for _s, x, y, _h in odm.sample_reference_line(road, 0.5)]
+        for road in net.roads
+    ]
+    parking_polys = [_poly_exterior_xy(p, ox, oy) for p in net.parking_polygons]
+    parking_polys = [pts for pts in parking_polys if pts]
+    return lane_polys, centerlines, parking_polys
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +239,14 @@ def load_from_mcap(path: str) -> tuple[str | None, dict[int, dict]]:
     for gt in betterosi.read(path, return_ground_truth=True, mcap_topics=["ground_truth"]):
         ts = gt.timestamp
         ts_nanos = int(ts.seconds) * 1_000_000_000 + int(ts.nanos)
+        # Normalise to absolute (proj_string CRS) so local-frame mcaps overlay the
+        # absolute map: world = R(yaw)·osi + proj_frame_offset (offset absent => no-op).
+        pfo = getattr(gt, "proj_frame_offset", None)
+        ofx = ofy = 0.0
+        ccos, csin = 1.0, 0.0
+        if pfo is not None and getattr(pfo, "position", None) is not None:
+            ofx, ofy = pfo.position.x, pfo.position.y
+            ccos, csin = math.cos(pfo.yaw), math.sin(pfo.yaw)
         for mo in gt.moving_object:
             oid = int(mo.id.value)
             if oid not in obj_meta:
@@ -496,8 +264,8 @@ def load_from_mcap(path: str) -> tuple[str | None, dict[int, dict]]:
             b = mo.base
             obj_rows.setdefault(oid, []).append({
                 "total_nanos": ts_nanos,
-                "x": float(b.position.x),
-                "y": float(b.position.y),
+                "x": float(b.position.x) * ccos - float(b.position.y) * csin + ofx,
+                "y": float(b.position.x) * csin + float(b.position.y) * ccos + ofy,
                 "vel_x": float(b.velocity.x),
                 "vel_y": float(b.velocity.y),
                 "yaw": float(b.orientation.yaw),
@@ -678,7 +446,8 @@ class _LoadWorker(QtCore.QThread):
         self._cancelled = True
 
     def run(self) -> None:
-        result: dict = {"trajs_a": {}, "trajs_b": {}, "trajs_c": {}, "roads": [], "parking": []}
+        result: dict = {"trajs_a": {}, "trajs_b": {}, "trajs_c": {},
+                        "lane_polys": [], "centerlines": [], "parking_polys": []}
         xodr_xmls: list = []
         try:
             for slot in ("a", "b", "c"):
@@ -709,25 +478,15 @@ class _LoadWorker(QtCore.QThread):
             if self._cancelled:
                 return
 
-            if self._xodr_path:
-                self.progress.emit(f"Parsing map: {Path(self._xodr_path).name}…")
+            # Lane polygons + centerlines + parking all come from opendrive-map.
+            if self._xodr_path or xodr_xmls:
+                self.progress.emit("Building map geometry…")
                 try:
-                    roads, parking, _ = parse_xodr(self._xodr_path)
+                    geom = (map_geometry_from_xodr(path=self._xodr_path) if self._xodr_path
+                            else map_geometry_from_xodr(text=xodr_xmls[0]))
+                    result["lane_polys"], result["centerlines"], result["parking_polys"] = geom
                 except Exception as exc:
-                    self.failed.emit(f"Could not load XODR: {exc}")
-                    return
-            elif xodr_xmls:
-                self.progress.emit("Parsing embedded map…")
-                try:
-                    roads, parking, _ = parse_xodr_text(xodr_xmls[0])
-                except Exception as exc:
-                    print(f"Warning: could not parse embedded XODR: {exc}")
-                    roads, parking = [], []
-            else:
-                roads, parking = [], []
-
-            result["roads"] = roads
-            result["parking"] = parking
+                    print(f"Warning: opendrive-map geometry failed: {exc}")
             if not self._cancelled:
                 self.done.emit(result)
         except Exception as exc:
@@ -785,46 +544,40 @@ def _add_traj_paths(
 
 def build_scene(
     scene: QtWidgets.QGraphicsScene,
-    roads: list[Road],
-    parking: list[ParkingObject],
-    road_map: dict[str, Road],
+    lane_polys: list[tuple[int, list[tuple[float, float]]]],
+    centerlines: list[list[tuple[float, float]]],
+    parking_polys: list[list[tuple[float, float]]],
     trajectories: dict[int, dict],
     obj_colors: dict[int, QtGui.QColor],
     path_alpha: int = 255,
 ) -> dict[int, QtWidgets.QGraphicsPathItem]:
     no_pen = QtGui.QPen(QtCore.Qt.NoPen if hasattr(QtCore.Qt, "NoPen") else QtCore.Qt.PenStyle.NoPen)
 
-    # 1. Lane polygons
-    for road in roads:
-        for lane_id, poly in build_lane_polygons(road):
-            if lane_id < 0:
-                brush = QtGui.QBrush(QtGui.QColor(0, 180, 0, 80))
-            else:
-                brush = QtGui.QBrush(QtGui.QColor(0, 0, 200, 80))
-            scene.addPolygon(_qpoly(poly), no_pen, brush)
+    # 1. Lane polygons (absolute UTM, from opendrive-map)
+    for lane_id, poly in lane_polys:
+        if lane_id < 0:
+            brush = QtGui.QBrush(QtGui.QColor(0, 180, 0, 80))
+        else:
+            brush = QtGui.QBrush(QtGui.QColor(0, 0, 200, 80))
+        scene.addPolygon(_qpoly(poly), no_pen, brush)
 
-    # 2. Centerlines
+    # 2. Centerlines (road reference lines, absolute UTM)
     center_pen = QtGui.QPen(QtGui.QColor(0, 0, 0))
     center_pen.setWidthF(0.15)
-    for road in roads:
-        samples = _sample_road(road)
+    for samples in centerlines:
         if len(samples) < 2:
             continue
         path = QtGui.QPainterPath()
-        path.moveTo(samples[0][1], -samples[0][2])
-        for _, x, y, _ in samples[1:]:
+        path.moveTo(samples[0][0], -samples[0][1])
+        for x, y in samples[1:]:
             path.lineTo(x, -y)
         scene.addPath(path, center_pen)
 
-    # 3. Parking
+    # 3. Parking (absolute UTM, from opendrive-map)
     park_brush = QtGui.QBrush(QtGui.QColor(128, 128, 128, 100))
     park_pen = QtGui.QPen(QtGui.QColor(64, 64, 64))
     park_pen.setWidthF(0.1)
-    for obj in parking:
-        road = road_map.get(obj.road_id)
-        if road is None:
-            continue
-        rect_pts = build_parking_rect(obj, road)
+    for rect_pts in parking_polys:
         if rect_pts:
             scene.addPolygon(_qpoly(rect_pts), park_pen, park_brush)
 
@@ -1106,7 +859,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             raise ValueError(f"Unsupported file type: {path}")
 
     def _fit(self):
-        self.view.fitInView(self.scene.sceneRect(), _keep_aspect_ratio())
+        self.view.fitInView(self.scene.itemsBoundingRect(), _keep_aspect_ratio())
 
     def _wheel_zoom(self, event):
         try:
@@ -1134,6 +887,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._play_timer.stop()
         self._btn_play.setText("▶")
         self.scene.clear()
+        self.scene.setSceneRect(QtCore.QRectF())  # let the rect recompute from new items
         self._traj_items_a = {}
         self._traj_items_b = {}
         self._traj_items_c = {}
@@ -1218,7 +972,13 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             except Exception:
                 pass
             self._progress_dlg.close()
+        # Show the error on a clean scene and frame it, so it is visible regardless of
+        # the previous view transform and does not pollute the next load's scene rect.
+        self.scene.clear()
+        self.scene.setSceneRect(QtCore.QRectF())
         self.scene.addText(f"Error loading: {msg}")
+        self.scene.setSceneRect(self.scene.itemsBoundingRect())
+        self.view.fitInView(self.scene.itemsBoundingRect(), _keep_aspect_ratio())
 
     def _on_load_done(self, result: dict) -> None:
         self._trajs_a = result["trajs_a"]
@@ -1226,7 +986,8 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._trajs_c = result["trajs_c"]
         if hasattr(self, "_load_label"):
             self._load_label.setText("Building scene…")
-        self._rebuild_ui_and_scene(result["roads"], result["parking"])
+        self._rebuild_ui_and_scene(result["lane_polys"], result["centerlines"],
+                                   result["parking_polys"])
         if hasattr(self, "_progress_dlg"):
             try:
                 self._progress_dlg.finished.disconnect(self._on_load_cancel)
@@ -1234,7 +995,7 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
                 pass
             self._progress_dlg.close()
 
-    def _rebuild_ui_and_scene(self, roads, parking) -> None:
+    def _rebuild_ui_and_scene(self, lane_polys, centerlines, parking_polys) -> None:
         all_ids = set(self._trajs_a) | set(self._trajs_b) | set(self._trajs_c)
         self._obj_colors = _build_obj_colors(all_ids)
         self._build_type_subtype_objs()
@@ -1253,10 +1014,9 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
         self._all_nanos = _build_full_timeline(nanos_set)
 
         path_alpha = 80 if self._all_nanos else 255
-        road_map = {r.id: r for r in roads}
 
         self._traj_items_a = build_scene(
-            self.scene, roads, parking, road_map,
+            self.scene, lane_polys, centerlines, parking_polys,
             self._trajs_a, self._obj_colors, path_alpha=path_alpha,
         )
         if self._trajs_b:
@@ -1282,6 +1042,10 @@ class TrajectoryExplorer(QtWidgets.QMainWindow):
             self._slider.setValue(0)
             self._update_frame(0)
 
+        # Reset the scene rect to the current items: QGraphicsScene.sceneRect() only
+        # grows (never shrinks), so after a clear+reload a stale rect would make
+        # fitInView zoom past the new content and show nothing.
+        self.scene.setSceneRect(self.scene.itemsBoundingRect())
         self.view.fitInView(self.scene.sceneRect(), _keep_aspect_ratio())
 
     def _build_type_subtype_objs(self) -> None:

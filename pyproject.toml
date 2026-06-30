@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cosmo"
-version = "0.4.1"
+version = "0.5.0"
 description = "COSMO conversion tools (OpenLABEL -> OSI/MCAP + Omega-Prime CSV) with GUI"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy", "pandas", "pillow", "matplotlib", "dataprov", "reverse_geocoder", "pycountry"]
+dependencies = ["numpy", "pandas", "pillow", "matplotlib", "dataprov", "reverse_geocoder", "pycountry", "orbit-georef", "opendrive-map"]
 
 
 [dependency-groups]
@@ -25,6 +25,12 @@ docs       = ["mkdocs-material", "mkdocstrings[python]"]
 cosmo-cli            = [{include-group = "mcap"}, {include-group = "plot"}]
 cosmo-gui            = [{include-group = "gui"}, {include-group = "mcap"}, {include-group = "plot"}]
 trajectory-explorer  = [{include-group = "gui"}, {include-group = "mcap"}, {include-group = "ontology"}]
+
+# orbit-georef and opendrive-map are standalone packages living as subdirectories
+# of the ORBIT repo, pinned here to per-lib git tags. Bump the tag to upgrade.
+[tool.uv.sources]
+orbit-georef = { git = "https://github.com/RI-SE/ORBIT.git", subdirectory = "orbit-georef", tag = "orbit-georef-v0.1.2" }
+opendrive-map = { git = "https://github.com/RI-SE/ORBIT.git", subdirectory = "opendrive-map", tag = "opendrive-map-v0.1.0" }
 
 [project.scripts]
 cosmo = "cosmo.cli.main:main"

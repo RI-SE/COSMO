@@ -39,6 +39,18 @@ try:
 except ImportError:  # pragma: no cover
     betterosi = None
 
+# orbit-georef owns the ORBIT georef JSON format + pixel→ground transform.
+try:
+    from orbit_georef import GeoTransformer
+except ImportError:  # pragma: no cover
+    GeoTransformer = None
+
+# opendrive-map owns the authoritative OpenDRIVE header <offset> (map frame origin).
+try:
+    from opendrive_map import read_offset as _read_map_offset
+except ImportError:  # pragma: no cover
+    _read_map_offset = None
+
 from cosmo.converters.ontology_mapper import OntologyMapper
 
 # -----------------------------------------------------------------------------
@@ -308,7 +320,14 @@ def load_alignment(
                 f"Unsupported ORBIT georef transform_method='{georef.get('transform_method')}'. "
                 "Expected homography-style pixel->ground transform."
             )
-        if "transformation_matrix" in georef:
+        # orbit-georef owns the ORBIT georef format; use it for full exports and
+        # fall back to inline parsing for partial/legacy calibration-style files.
+        is_full_orbit_georef = all(
+            k in georef for k in ("transformation_matrix", "inverse_matrix", "reference_point")
+        )
+        if GeoTransformer is not None and georef_data_path and is_full_orbit_georef:
+            H = GeoTransformer.from_file(georef_data_path).transform_matrix
+        elif "transformation_matrix" in georef:
             H = np.array(georef["transformation_matrix"], dtype=np.float64)
         elif "homography" in georef:
             H = np.array(georef["homography"], dtype=np.float64)
@@ -556,6 +575,7 @@ def convert_openlabel_to_omega(
     corrector=None,
     stabilize_size: bool = False,
     country_code: Optional[int] = None,
+    object_frame: str = "global",
 ):
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP.
@@ -598,6 +618,20 @@ def convert_openlabel_to_omega(
     if write_mcap and betterosi is None:
         _log('[COSMO] MCAP requested but betterosi is not installed; will write CSV only.')
 
+    # Object output frame. "global": absolute coords in the proj_string CRS (default).
+    # "local": coords shifted by the map's header <offset> so objects and the embedded
+    # OpenDRIVE share one frame; the offset is recorded in OSI proj_frame_offset.
+    frame_off = (0.0, 0.0, 0.0)
+    if object_frame == "local":
+        if not (odr_path and _read_map_offset and os.path.isfile(odr_path)):
+            raise ValueError(
+                "object_frame='local' requires --odr with a header <offset> "
+                "(and opendrive-map installed)."
+            )
+        frame_off = _read_map_offset(odr_path)
+        _log(f"[COSMO] object_frame=local; subtracting map offset {frame_off}")
+    elif object_frame != "global":
+        raise ValueError(f"object_frame must be 'global' or 'local', got {object_frame!r}")
 
     vt_name_to_code, vr_name_to_code, vt_default, vr_default = build_enum_code_maps()
 
@@ -752,6 +786,13 @@ def convert_openlabel_to_omega(
             gt.proj_string = _gt_proj_string
         if _gt_country_code:
             gt.country_code = _gt_country_code
+        if object_frame == "local" and any(frame_off):
+            # OSI: world = proj_frame_offset + osi, then proj_string. Records the
+            # local→projected-CRS shift so local coords stay fully georeferenced.
+            gt.proj_frame_offset = betterosi.GroundTruthProjFrameOffset(
+                position=betterosi.Vector3D(x=frame_off[0], y=frame_off[1], z=frame_off[2]),
+                yaw=0.0,
+            )
         # Provide log_time explicitly; readers often build indices from it. [4](https://ika-rwth-aachen.github.io/omega-prime/notebooks/tutorial/)
         writer_mcap.add(gt, topic="ground_truth", log_time=total_nanos)
 
@@ -808,6 +849,8 @@ def convert_openlabel_to_omega(
                             height = h_veh
                         else:
                             length, width, height = estimate_dims(label_type, w_px, h_px, oid)
+
+                    X, Y, Z = X - frame_off[0], Y - frame_off[1], Z - frame_off[2]
 
                     if stabilize_size:
                         length, width, height = size_avg.get(oid, (length, width, height))
@@ -910,6 +953,8 @@ def convert_openlabel_to_omega(
                         height = h_veh
                     else:
                         length, width, height = estimate_dims(label_type, w_px, h_px, oid)
+
+                X, Y, Z = X - frame_off[0], Y - frame_off[1], Z - frame_off[2]
 
                 if stabilize_size:
                     length, width, height = size_avg.get(oid, (length, width, height))

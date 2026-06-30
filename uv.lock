@@ -463,13 +463,15 @@ wheels = [
 
 [[package]]
 name = "cosmo"
-version = "0.4.1"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "dataprov" },
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "opendrive-map" },
+    { name = "orbit-georef" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pillow" },
@@ -530,6 +532,8 @@ requires-dist = [
     { name = "dataprov" },
     { name = "matplotlib" },
     { name = "numpy" },
+    { name = "opendrive-map", git = "https://github.com/RI-SE/ORBIT.git?subdirectory=opendrive-map&tag=opendrive-map-v0.1.0" },
+    { name = "orbit-georef", git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&tag=orbit-georef-v0.1.2" },
     { name = "pandas" },
     { name = "pillow" },
     { name = "pycountry" },
@@ -1952,6 +1956,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/88/0a/459861c42d9591676ea32d9a72b364eee442f8c9e0f0816c90e1fdd9699e/omega_prime-0.3.0.tar.gz", hash = "sha256:d9d494f72922d17eb38a3993bc3a728448db144ab1bec6af64d8150c99ee4147", size = 8215710, upload-time = "2026-03-20T10:03:16.105Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/43/8e03427e0b8ca8db3af3cb2df5cdf079c1fa43b47b3765de7d27a4fde087/omega_prime-0.3.0-py3-none-any.whl", hash = "sha256:f003f452c734cd9c1cd7573d48772ad7ed546f88570e14a517fcac4ffa897f9d", size = 60612, upload-time = "2026-03-20T10:03:14.63Z" },
+]
+
+[[package]]
+name = "opendrive-map"
+version = "0.1.0"
+source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=opendrive-map&tag=opendrive-map-v0.1.0#5e5b0d1ba63d6553bc787fe3b0ecfbcd6c4a70cd" }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pyproj", version = "3.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "shapely" },
+]
+
+[[package]]
+name = "orbit-georef"
+version = "0.1.2"
+source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&tag=orbit-georef-v0.1.2#13007cc51bd002c55fd60352d1ad54130fb2fcba" }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pyproj", version = "3.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 
 [[package]]

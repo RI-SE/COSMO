@@ -59,6 +59,10 @@ class ConvertConfig:
     # ISO 3166-1 numeric country code; auto-derived from georef lat/lon if None
     country_code: Optional[int] = None
 
+    # object output frame: "global" (absolute proj_string CRS) or "local"
+    # (map-local; offset recorded in OSI proj_frame_offset)
+    object_frame: str = "global"
+
     # output control
     out_dir: Optional[str] = None  # If None => <project>/runs/<timestamp>_convert_<stem>/
     run_name: Optional[str] = None  # Optional override for the run folder name
@@ -277,6 +281,7 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         corrector=corrector,
         stabilize_size=cfg.stabilize_size,
         country_code=cfg.country_code,
+        object_frame=cfg.object_frame,
     )
 
     # determine produced outputs
