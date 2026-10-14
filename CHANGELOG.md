@@ -7,7 +7,13 @@ All notable changes to COSMO are documented here. Format follows
 > (commits where `version` changed in `pyproject.toml`, and the commits between them). Dates are those
 > commit dates. They are best-effort summaries and may be incomplete.
 
-## [0.6.0] – unreleased
+## [0.6.1] – unreleased
+
+### Changed
+- Vehicle roles: Train → PUBLIC_TRANSPORT (was CIVIL); AgriculturalVehicle and EmergencyVehicle → OTHER
+  (was CIVIL), since OSI has no agricultural or generic emergency role.
+
+## [0.6.0] – 2026-10-14
 
 ### Added
 - OSI `GroundTruth.environmental_conditions` in the MCAP output, filled per frame from optional sources:

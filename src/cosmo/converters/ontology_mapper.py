@@ -67,9 +67,13 @@ _BUILTIN_ROLE: dict[str, str] = {
     "ambulance": "AMBULANCE",
     "fire":      "FIRE",
     "police":    "POLICE",
-    # Assumes buses/trams are in public service; private ones are rare in our data
+    # Assumes buses/trams/trains are in public service; private ones are rare in our data
     "bus":       "PUBLIC_TRANSPORT",
     "tram":      "PUBLIC_TRANSPORT",
+    "train":     "PUBLIC_TRANSPORT",
+    # OSI has no agricultural or generic emergency role; OTHER = known but unspecified
+    "agriculturalvehicle": "OTHER",
+    "emergencyvehicle":    "OTHER",
 }
 
 # omega-prime MovingObjectType name → OSI numeric code

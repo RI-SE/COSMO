@@ -120,7 +120,7 @@ classes become OTHER. Vehicle classification is only written for type VEHICLE.
 | Trailer, Caravan | VEHICLE | TRAILER | CIVIL |
 | Bus | VEHICLE | BUS | PUBLIC_TRANSPORT ¹ |
 | Tram | VEHICLE | TRAM | PUBLIC_TRANSPORT ¹ |
-| Train | VEHICLE | TRAIN | CIVIL |
+| Train | VEHICLE | TRAIN | PUBLIC_TRANSPORT ¹ |
 | Motorbike | VEHICLE | MOTORBIKE | CIVIL |
 | Bicycle | VEHICLE | BICYCLE | CIVIL |
 | StandupScooter | VEHICLE | STANDUP_SCOOTER | CIVIL |
@@ -128,13 +128,15 @@ classes become OTHER. Vehicle classification is only written for type VEHICLE.
 | Ambulance | VEHICLE | OTHER | AMBULANCE |
 | Fire | VEHICLE | OTHER | FIRE |
 | Police | VEHICLE | OTHER | POLICE |
-| Vehicle, EmergencyVehicle, AgriculturalVehicle, ConstructionVehicle, SlowMovingVehicle | VEHICLE | OTHER | CIVIL |
+| EmergencyVehicle, AgriculturalVehicle | VEHICLE | OTHER | OTHER ³ |
+| Vehicle, ConstructionVehicle, SlowMovingVehicle | VEHICLE | OTHER | CIVIL |
 | Human, Pedestrian | PEDESTRIAN | – | – |
 | Animal | ANIMAL | – | – |
 | RoadUser, DynamicObject, unknown | OTHER | – | – |
 
-¹ Assumes buses and trams are in public service.
+¹ Assumes buses, trams and trains are in public service.
 ² OSI models wheelchairs only as a vehicle classification type, so wheelchair users are exported as vehicles.
+³ OSI has no agricultural or generic emergency role; OTHER means a known but unspecified role.
 
 The CSV `role`/`role_name` columns carry the same role for every object (CIVIL when the class implies none).
 
@@ -145,12 +147,12 @@ The CSV `role`/`role_name` columns carry the same role for every object (CIVIL w
 | `time_of_day.seconds_since_midnight` | same as above | local time in `--timezone` (default Europe/Stockholm) |
 | `sun.azimuth`, `sun.elevation` | time above + position: SRT GPS per frame, else flight-record mean lat/lon, else georef `reference_point` | NOAA solar position, no refraction. OSI azimuth is counterclockwise from north (west = +π/2). |
 | `ambient_illumination` | `--srt` exposure (ISO, shutter, f-number, EV compensation) | lux ≈ 2.5·2^EV100 (reflected-light estimate, about ±1 level) → OSI LEVEL1–9 lux bands |
-| `precipitation` | OpenLABEL weather annotation ³ | `precipitation=none` → NONE; intensity light/moderate/heavy → LIGHT/MODERATE/HEAVY; otherwise UNKNOWN |
-| `fog` | OpenLABEL weather `visibility_km` ³ | OSI visibility bands (≥40 km EXCELLENT, 10–40 GOOD, 4–10 MODERATE, 2–4 POOR, 1–2 MIST, 0.2–1 LIGHT, 0.05–0.2 THICK, <0.05 DENSE) |
-| `clouds.fractional_cloud_cover` | OpenLABEL weather `cloud_cover` ³ | clear → ZERO_OKTAS, partly_cloudy → FOUR_OKTAS (assumed 3–5 oktas), overcast → EIGHT_OKTAS |
+| `precipitation` | OpenLABEL weather annotation ⁴ | `precipitation=none` → NONE; intensity light/moderate/heavy → LIGHT/MODERATE/HEAVY; otherwise UNKNOWN |
+| `fog` | OpenLABEL weather `visibility_km` ⁴ | OSI visibility bands (≥40 km EXCELLENT, 10–40 GOOD, 4–10 MODERATE, 2–4 POOR, 1–2 MIST, 0.2–1 LIGHT, 0.05–0.2 THICK, <0.05 DENSE) |
+| `clouds.fractional_cloud_cover` | OpenLABEL weather `cloud_cover` ⁴ | clear → ZERO_OKTAS, partly_cloudy → FOUR_OKTAS (assumed 3–5 oktas), overcast → EIGHT_OKTAS |
 | temperature, pressure, humidity, wind | – | not set (no source yet) |
 
-³ `WeatherContext` (per frame interval) takes precedence over the sequence-level `WeatherTag`; both are written by
+⁴ `WeatherContext` (per frame interval) takes precedence over the sequence-level `WeatherTag`; both are written by
 SAVANT markit's VLM analysis.
 
 Not exported: the road, junction, traffic, structures, notes and VLM-analysis tags. Road and junction layout is in the

@@ -23,7 +23,9 @@ def test_builtin_classify(label, expected):
     "label, expected",
     [
         ("Ambulance", "AMBULANCE"), ("Fire", "FIRE"), ("Police", "POLICE"),
-        ("Bus", "PUBLIC_TRANSPORT"), ("Tram", "PUBLIC_TRANSPORT"), ("Car", None),
+        ("Bus", "PUBLIC_TRANSPORT"), ("Tram", "PUBLIC_TRANSPORT"), ("Train", "PUBLIC_TRANSPORT"),
+        ("AgriculturalVehicle", "OTHER"), ("EmergencyVehicle", "OTHER"),
+        ("ConstructionVehicle", None), ("Car", None),
     ],
 )
 def test_builtin_role(label, expected):
