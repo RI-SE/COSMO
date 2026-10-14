@@ -12,6 +12,16 @@ All notable changes to COSMO are documented here. Format follows
 ### Changed
 - Vehicle roles: Train → PUBLIC_TRANSPORT (was CIVIL); AgriculturalVehicle and EmergencyVehicle → OTHER
   (was CIVIL), since OSI has no agricultural or generic emergency role.
+- Documentation restructured: README covers inputs, install and usage; mapping tables moved to
+  `docs/reference/osi-mapping.md`; new input references for georef/calibration and the flight record;
+  CLI reference covers all commands; quickstart merged into README/workflow; stale references removed.
+
+### Fixed
+- `--fps` (GUI: FPS override) did not override an `fps` in the georef or calibration file. Order is now
+  `--srt`, `--fps`, georef, calibration, 30 fps.
+- A georef file with `"fps": null` crashed convert; null now falls through to the next source.
+- `run_summary.json` `fps_used` only echoed `--fps` (null otherwise); it now reports the frame rate actually
+  used (`convert_openlabel_to_omega` returns it).
 
 ## [0.6.0] – 2026-10-14
 

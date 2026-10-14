@@ -1,24 +1,27 @@
 # Outputs: Omega‑Prime CSV + OSI/MCAP
 
-COSMO writes all outputs inside a per-run folder under `runs/` by default.
-
----
-
 ## Convert run artifacts
 
-A convert run produces:
-- `run_inputs.json` — resolved configuration and input paths
-- `run_summary.json` — produced outputs, alignment source, applied offsets
-- `outputs/<base_name>.csv` (if enabled)
-- `outputs/<base_name>.mcap` (if enabled and `betterosi` installed)
+By default every run gets its own folder under `-o` (default `runs/`):
 
-`<base_name>` is derived from the OpenLABEL file stem (sanitized and lowercased).
+```text
+runs/<timestamp>_convert_<base_name>/
+  outputs/
+    <base_name>.csv      (unless --no-csv)
+    <base_name>.mcap     (unless --no-mcap; needs betterosi)
+  run_inputs.json        resolved configuration and input paths
+  run_summary.json       produced outputs, fps used, alignment source, applied offsets/flips
+```
 
----
+`<base_name>` is the OpenLABEL file stem (sanitized and lowercased). `--run-name` overrides the folder name.
+
+With `--output-prefix PREFIX` the run folder is skipped and only `PREFIX.csv` / `PREFIX.mcap` are written
+(used by pipelines). `--prov-out PATH` additionally writes a W3C-PROV provenance record (dataprov) listing
+all inputs, with upstream provenance from the `--*-prov` options inlined.
 
 ## CSV schema (Omega‑Prime moving objects)
 
-COSMO writes the following columns:
+One row per object and frame:
 
 ```text
 total_nanos, idx, x, y, z,
@@ -30,29 +33,11 @@ type, subtype, role,
 type_name, subtype_name, role_name
 ```
 
-Notes:
+- `total_nanos`: frame timestamp relative to video frame 0.
+- `idx`: stable integer ID, assigned by sorting the OpenLABEL object IDs and numbering from 1.
+- `vel_*`, `acc_*`: finite differences between an object's consecutive appearances, divided by the real time step.
+- `type`/`subtype`/`role` (OSI codes) and their `*_name` columns: see [object classes](osi-mapping.md#object-classes).
+  `role` is CIVIL when the class implies no other role.
 
-* idx is a stable integer ID assigned by sorting object IDs and numbering from 1.
-* Kinematics (vel_*, acc_*) are estimated from differences between an object's consecutive appearances,
-  divided by the real time step (frame period from `--srt`, else FPS).
-* role/role_name: OSI vehicle role implied by the class (e.g. PUBLIC_TRANSPORT for Bus), else CIVIL.
-
-Each `ground_truth` message also carries `environmental_conditions` when sources are available
-(time, sun, illumination, precipitation, fog, clouds); see the Transformations section in the main README.
-
-
-## MCAP / OSI (optional)
-MCAP writing requires betterosi. If MCAP is requested but betterosi is missing, COSMO logs that it will write CSV only.
-## Topics
-COSMO writes topics without a leading slash:
-
-* ground_truth_map — embedded OpenDRIVE (if provided)
-* ground_truth — OSI GroundTruth messages per frame
-
-
-## Alignment source (important)
-COSMO chooses pixel→ground mapping in this order:
-
-* ORBIT georef (--georef-data): prefers transformation_matrix as homography
-* calibration (--calibration)
-* none (debug fallback)
+How each column is derived, and the OSI/MCAP content, is described in
+[OSI/MCAP output and mapping](osi-mapping.md).

@@ -361,12 +361,8 @@ def load_alignment(
     calib = load_json(calibration_path) if calibration_path else {}
     georef = load_json(georef_data_path) if georef_data_path else {}
 
-    fps = float(
-        georef.get(
-            "fps",
-            calib.get("fps", fps_arg if fps_arg is not None else 30.0),
-        )
-    )
+    # Explicit --fps wins; null/0 fps in the files counts as absent
+    fps = float(fps_arg or georef.get("fps") or calib.get("fps") or 30.0)
 
     H: Optional[np.ndarray] = None
 
@@ -587,9 +583,9 @@ def convert_openlabel_to_omega(
     timezone_name: str = DEFAULT_TIMEZONE,
     flight_record_path: Optional[str] = None,
     flight_record_sequence: int = 0,
-):
+) -> float:
     """
-    Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP.
+    Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP; returns the fps used.
 
     Signature matches the former script version for Phase 1 compatibility.
     """
@@ -1011,3 +1007,4 @@ def convert_openlabel_to_omega(
         f"{'[MCAP ' + out_prefix + '.mcap] ' if (write_mcap and betterosi is not None) else ''}"
         f"{'[CSV ' + out_prefix + '.csv] ' if write_csv else ''}"
     )
+    return 1.0 / dt

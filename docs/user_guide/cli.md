@@ -1,173 +1,129 @@
-## GUI launch
-
-```bash
-cosmo
-# or
-cosmo gui
-```
-
-Development shortcut (either of):
-
-```bash
-python run_gui.py # Start GUI
-python run_cosmo.py gui # Same behaviour as cosmo (when installed)
-cosmo.cmd gui # Same behaviour in Windows cmd termial as cosmo (when installed)
-cosmo.ps1 gui # Same behaviour in Windows PowerShell termial as cosmo (when installed)
-```
-
 # CLI reference
 
-COSMO provides a `cosmo` command with subcommands like `convert` and `calibrate`.
+| Command | Purpose |
+|---|---|
+| `cosmo convert` | OpenLABEL → Omega‑Prime CSV and OSI/MCAP |
+| `cosmo correct` | oblique-drone bbox correction, OpenLABEL → corrected OpenLABEL |
+| `cosmo calibrate` | compute a pixel→ground calibration (fallback for ORBIT georef) |
+| `trajectory-explorer` | viewer for CSV/MCAP/OpenLABEL trajectories on an OpenDRIVE map |
+| `cosmo` / `cosmo gui` | start the GUI (plain `cosmo` without a subcommand starts the GUI; use subcommands on headless machines) |
+
+`cosmo-convert`, `cosmo-correct`, `cosmo-calibrate` and `cosmo-gui` are equivalent standalone scripts.
+For a walkthrough see the [workflow guide](workflow.md).
 
 ---
 
 ## `cosmo convert`
 
-Convert OpenLABEL → Omega‑Prime CSV and optionally OSI/MCAP. Outputs are written under a per-run folder.
-
-### Input styles
 ```bash
-cosmo convert INPUT.json [options]
-cosmo convert --input INPUT.json [options]
-cosmo convert --openlabel INPUT.json [options]
+cosmo convert INPUT.json [options]          # or --input / --openlabel INPUT.json
 ```
 
-`--input` and `--openlabel` are aliases.
-### Recommended (ORBIT georef happy path)
-```bash
-cosmo convert scenario.json \
-  --georef-data path/to/*_georef_data.json \
-  --odr path/to/map.xodr \
-  -o runs/
-```
-### Fallback (calibration)
-```bash
-cosmo convert scenario.json \
-  --calibration path/to/<base_name>_calibration.json \
-  -o runs/
-```
-### Output toggles
-Defaults are `--csv` and `--mcap` enabled. Use:
-```bash
-cosmo convert scenario.json --no-mcap -o runs/
-cosmo convert scenario.json --no-csv  -o runs/
-```
+### Inputs
+| Option | Description |
+|---|---|
+| `--georef-data PATH` | ORBIT `*_georef_data.json` (recommended pixel→ground mapping); see [georef input](../reference/inputs-georef.md) |
+| `--calibration PATH` | calibration JSON from `cosmo calibrate` (fallback) |
+| `--odr`, `--opendrive PATH` | OpenDRIVE map, embedded in the MCAP; see [OpenDRIVE input](../reference/inputs-opendrive.md) |
+| `--srt PATH` | DJI SRT of the annotated video: frame timing and environmental conditions; see [SRT input](../reference/inputs-srt.md) |
+| `--timezone IANA` | timezone of the SRT clock and for local time of day (default `Europe/Stockholm`) |
+| `--flight-record PATH` | `FlightRecord_*.video_stats.json`: bbox correction, and start time/position without `--srt`; see [flight record input](../reference/inputs-flight-record.md) |
+| `--flight-record-sequence N` | sequence index in the flight record (default 0) |
+| `--fps FPS` | frame rate; overrides georef/calibration `fps`, but not `--srt` (default: from those files, else 30) |
 
-### Post-projection alignment fixes
-```bash
-cosmo convert scenario.json \
-  --georef-data path/to/*_georef_data.json \
-  --swap-xy --yaw-offset-deg 90 \
-  --xy-offset 1.2 -0.5 \
-  -o runs/
-```
-Available flags: `--swap-xy`, `--flip-x`, `--flip-y`, `--xy-offset DX DY`, `--yaw-offset-deg DEG`.
-### Frame timing and environmental conditions (optional)
-```bash
-cosmo convert scenario.json \
-  --georef-data path/to/*_georef_data.json \
-  --flight-record path/to/FlightRecord_*.video_stats.json \
-  --srt path/to/VIDc_*.srt --srt-prov path/to/DPR_VIDc_*.json \
-  -o runs/
-```
-- `--srt PATH`: DJI SRT of the annotated video. Sets the frame period (replaces fps) and per-frame
-  absolute time, sun position and ambient illumination in OSI `environmental_conditions`.
-- `--timezone IANA`: timezone of the SRT clock and for local time of day (default `Europe/Stockholm`).
-- `--flight-record PATH`: without `--srt`, gives start time and position for time of day and sun position.
-- `--srt-prov PATH`: provenance of the SRT, inlined into `--prov-out` (like `--flight-record-prov`).
+### Outputs
+| Option | Description |
+|---|---|
+| `-o`, `--output`, `--out DIR` | base directory for per-run folders (default `runs/`), or an explicit run directory |
+| `--output-prefix PREFIX` | write `PREFIX.csv` / `PREFIX.mcap` directly, without a run folder |
+| `--run-name NAME` | run folder name override |
+| `--csv/--no-csv`, `--mcap/--no-mcap` | enable/disable each output (both on by default) |
+| `--object-frame {global,local}` | `global` (default): positions in the georef CRS; `local`: shifted by the OpenDRIVE header offset (needs `--odr`), recorded in OSI `proj_frame_offset` |
+| `--country-code N` | ISO 3166-1 numeric code for OSI `country_code` (e.g. 752 = Sweden); derived from the georef position if omitted |
+| `--strip-xodr-namespace` | remove XML namespaces from the embedded OpenDRIVE (omega-prime workaround) |
+| `--json` | print the run result as JSON |
 
-Weather from the OpenLABEL `WeatherContext`/`WeatherTag` is always used when present. See the
-Transformations section in the main README and [SRT input](../reference/inputs-srt.md).
+### Alignment fixes (applied after projection)
+`--swap-xy`, `--flip-x`, `--flip-y`, `--xy-offset DX DY` (metres), `--yaw-offset-deg DEG` (CCW).
 
-### Run naming & JSON output
-```bash
-cosmo convert scenario.json --run-name saro_roundabout -o runs/
-cosmo convert scenario.json --json -o runs/
-```
+### Inline bbox correction
+| Option | Description |
+|---|---|
+| `--bbox-correction {none,analytical,3d}` | correct oblique-camera bboxes during conversion (default `none`; needs `--flight-record`) |
+| `--camera-model KEY` | camera model for HFOV/resolution (default `mavic3pro-standard`) |
+| `--hfov-deg FLOAT` | override horizontal FOV |
+| `--use-gps-cam-pos` | use the drone GPS position as camera position instead of the homography-derived one |
+| `--stabilize-size` | use per-object mean dimensions instead of per-frame ones |
+
+### Provenance
+| Option | Description |
+|---|---|
+| `--prov-out PATH` | write a W3C-PROV provenance record (dataprov) of this run |
+| `--prov-in PATH` | continue an existing provenance chain |
+| `--opendrive-prov`, `--georef-prov`, `--flight-record-prov`, `--srt-prov PATH` | provenance of each input, inlined into `--prov-out` |
 
 ---
 
 ## `cosmo correct`
 
-Pre-process an oblique-drone OpenLABEL file before conversion. Corrects perspective-distorted
-bboxes and optionally outputs world-frame cuboids. Use this when you want a corrected OpenLabel
-as an intermediate artefact (e.g. for inspection in the trajectory explorer).
+Pre-process an oblique-drone OpenLABEL file before conversion. Use it when you want the corrected
+OpenLABEL as an intermediate file (e.g. to inspect it in the trajectory explorer); otherwise use
+`cosmo convert --bbox-correction`.
 
 ```bash
 cosmo correct input.json -o corrected.json \
-  --georef-data path/to/*_georef_data.json \
-  --flight-record path/to/FlightRecord_*.video_stats.json
-```
-
-### Output coordinate format (`--output-coords`)
-| Value | Effect |
-|---|---|
-| `pixel` (default) | Updates rbbox with corrected pixel coords |
-| `geo` | Replaces rbbox with world-frame cuboid (uses proj_string from georef) |
-| `both` | Updates rbbox AND adds cuboid |
-
-### Size stabilization
-`--stabilize-size` replaces per-frame L/W/H with the per-object mean across all frames.
-Also adds `size_std` and `size_deviation` vec entries to the OpenLabel output, which the
-trajectory explorer surfaces as a ΔL×W×H column and a size σ tooltip.
-
-### Correction modes
-- `--bbox-correction analytical` (default): fast homography-based
-- `--bbox-correction 3d`: ray-casting using the flight record camera model; requires `--flight-record`
-
-### Typical two-step workflow
-```bash
-cosmo correct input.json -o corrected.json \
-  --georef-data georef.json \
-  --flight-record video_stats.json \
-  --output-coords geo \
-  --stabilize-size
-
+  --georef-data georef.json --flight-record video_stats.json \
+  --output-coords geo --stabilize-size
 cosmo convert corrected.json --georef-data georef.json -o runs/
 ```
 
-> **Inline alternative:** `cosmo convert` also supports `--bbox-correction analytical|3d`
-> (with `--flight-record`) for single-step correction without producing an intermediate file.
+| Option | Description |
+|---|---|
+| `-o`, `--output PATH` | corrected OpenLABEL (required) |
+| `--georef-data` / `--calibration PATH` | pixel→ground mapping (one required) |
+| `--flight-record PATH` (required), `--flight-record-sequence N` | drone/camera pose |
+| `--bbox-correction {analytical,3d}` | `analytical` (default): homography-based, fast; `3d`: ray casting with the flight-record camera model |
+| `--output-coords {pixel,geo,both}` | `pixel` (default): corrected rbbox; `geo`: replace rbbox with a world-frame cuboid (georef `proj_string`); `both` |
+| `--stabilize-size` | per-object mean dimensions; adds `size_mean`, `size_std`, `size_deviation` (shown by the trajectory explorer) |
+| `--camera-model`, `--hfov-deg`, `--use-gps-cam-pos` | as for `convert` |
+| `--workers N` | parallel worker processes (default 1; more is usually slower) |
+| `--prov-out`, `--prov-in`, `--georef-prov`, `--flight-record-prov` | provenance, as for `convert` |
 
 ---
 
-### cosmo calibrate
-Compute a calibration JSON (pixel→ground homography) into a per-run folder.
-#### Choose one input style (do not mix)
-##### Style A — --inputs (recommended)
+## `cosmo calibrate`
+
+Compute a calibration JSON (pixel→ground homography) into a per-run folder; see the
+[calibration how-to](../how-to/calibration.md).
+
 ```bash
 cosmo calibrate --inputs pixel_pairs.csv visual_markers.csv map.xodr -o runs/
+cosmo calibrate pixel_pairs.csv visual_markers.csv map.xodr -o runs/          # positional
+cosmo calibrate --pixel-pairs P.csv --visual-markers V.csv --opendrive map.xodr -o runs/
 ```
-##### Style B — positional
+Use one input style, do not mix.
+
+| Option | Description |
+|---|---|
+| `--image PATH` | frame image for the marker overlay plot |
+| `--openlabel PATH` | OpenLABEL for validation |
+| `--ransac-thresh-m M` | RANSAC inlier threshold on the ground (default 0.50 m) |
+| `--fps`, `--image-width`, `--image-height` | written to the calibration file (defaults 30, 3840 × 2160); `convert` uses this fps when there is no `--srt`, `--fps` or georef fps |
+| `-o`, `--run-name`, `--json`, `--prov-out`, `--prov-in` | as for `convert` |
+
+---
+
+## `trajectory-explorer`
+
 ```bash
-cosmo calibrate pixel_pairs.csv visual_markers.csv map.xodr -o runs/
-```
-##### Style C — explicit flags
-```bash
-cosmo calibrate \
-  --pixel-pairs pixel_pairs.csv \
-  --visual-markers visual_markers.csv \
-  --opendrive map.xodr \
-  -o runs/
+trajectory-explorer --xodr map.xodr --a runs/<run>/outputs/<name>.csv --b corrected.json
 ```
 
-##### Optional validation & visualization
-```bash
-cosmo calibrate --inputs pixel_pairs.csv visual_markers.csv map.xodr \
-  --image frame.png \
-  --openlabel scenario.json \
-  -o runs/
-```
+| Option | Description |
+|---|---|
+| `--xodr PATH` | OpenDRIVE map |
+| `--a`, `--b`, `--c PATH` | up to three sources to compare: `.csv`, `.mcap` or OpenLABEL `.json` |
+| `--smooth-window N`, `--smooth-sigma S` | Gaussian smoothing in frames (default 5, sigma = window/2) |
+| `--no-live-table` | skip table updates during playback (faster with many objects) |
 
-##### Useful knobs
-- --ransac-thresh-m (default 0.50) — RANSAC distance threshold in meters --fps,
-- --image-width, --image-height
-
-##### Calibration outputs
-Calibration writes stem-based files under outputs/:
-
-- <base_name>_calibration.json
-- <base_name>_homography_fit_summary.json
-- <base_name>_homography_fit_residuals.png
-- <base_name>_overlay_markers_on_image.png (only if --image is provided)
-
+Needs the `trajectory-explorer` dependency group.

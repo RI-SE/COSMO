@@ -48,6 +48,19 @@ def test_load_alignment_prefers_georef_over_calibration(tmp_path: Path):
     assert np.allclose(H, np.array([[2,0,0],[0,2,0],[0,0,1]], dtype=float))
 
 
+def test_load_alignment_fps_precedence(tmp_path: Path):
+    calib_path = tmp_path / "Calibration.json"
+    calib_path.write_text(json.dumps({"fps": 10}), encoding="utf-8")
+    georef_path = tmp_path / "my_georef_data.json"
+    georef_path.write_text(json.dumps({"fps": None, "transformation_matrix": np.eye(3).tolist()}),
+                           encoding="utf-8")
+
+    # null georef fps falls through to the calibration; an explicit fps_arg overrides both
+    assert load_alignment(str(calib_path), str(georef_path), fps_arg=None)[0] == 10.0
+    assert load_alignment(str(calib_path), str(georef_path), fps_arg=25.0)[0] == 25.0
+    assert load_alignment(None, None, fps_arg=None)[0] == 30.0
+
+
 def test_convert_openlabel_to_omega_writes_csv_only(tmp_path: Path):
     # OpenLABEL minimal
     openlabel = {

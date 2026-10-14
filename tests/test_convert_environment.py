@@ -61,6 +61,14 @@ def test_srt_drives_frame_timing(tmp_path: Path):
     assert int(rows[2]["total_nanos"]) == pytest.approx(67_000_000, abs=1_000_000)
 
 
+def test_converter_returns_fps_used(tmp_path: Path):
+    ol, calib, srt = _write_inputs(tmp_path, [0, 1, 2])
+    kwargs = dict(openlabel_path=str(ol), odr_path=None, out_prefix=str(tmp_path / "run"),
+                  calibration_path=str(calib), write_csv=False, write_mcap=False, log_fn=lambda _m: None)
+    assert convert_openlabel_to_omega(**kwargs) == pytest.approx(30.0)
+    assert convert_openlabel_to_omega(**kwargs, srt_path=str(srt)) == pytest.approx(1 / 0.0335, rel=0.01)
+
+
 def test_velocity_uses_real_time_step_across_frame_gaps(tmp_path: Path):
     ol, calib, _ = _write_inputs(tmp_path, [0, 1, 5])
     rows = _csv_rows(_convert(tmp_path, ol, calib, None, write_mcap=False))
