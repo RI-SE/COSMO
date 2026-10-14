@@ -124,7 +124,8 @@ The corrector ray-casts each detected bbox to the ground plane and returns a cor
 heading. The `analytical` mode uses a faster homography-based approximation; `3d` requires the
 flight record for the full ray-casting model.
 
-Without any correction flag, the flight record is ignored entirely. `H` handles everything,
+Without a correction flag the flight record is not used for positioning (only for time and sun
+position, see [flight record input](../reference/inputs-flight-record.md)). `H` handles everything,
 implicitly assuming the camera was approximately nadir when ORBIT's control points were set.
 
 ---

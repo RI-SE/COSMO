@@ -267,7 +267,7 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
                 log_fn(f"[COSMO] Oblique correction setup failed: {exc}")
 
     # Call converter (pass log_fn through)
-    converter_fn(
+    fps_used = converter_fn(
         openlabel_path=str(openlabel_path),
         odr_path=str(Path(cfg.opendrive).expanduser().resolve()) if cfg.opendrive else None,
         out_prefix=str(out_prefix),
@@ -307,9 +307,6 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         notes.append("CSV was requested but not found after conversion.")
     if mcap_path and not Path(mcap_path).is_file():
         notes.append("MCAP was requested but not found (missing betterosi or conversion disabled).")
-
-    # Best-effort fps_used: converter decides fps from georef/calibration/default if cfg.fps is None
-    fps_used = cfg.fps
 
     if not cfg.output_prefix:
         summary = {

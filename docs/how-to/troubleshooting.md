@@ -7,9 +7,8 @@ Open `<run_dir>/run_summary.json` to see:
 - which outputs were actually produced
 
 ## 2) MCAP missing?
-If MCAP was requested but missing:
-- install `betterosi` (MCAP requires it)
-- rerun the conversion
+MCAP needs `betterosi`: install the `mcap` dependency group (`uv sync --group mcap`, included in
+`cosmo-cli`/`cosmo-gui`) and rerun.
 
 ## 3) Alignment looks mirrored/rotated/shifted?
 Use post-projection options:
@@ -18,3 +17,12 @@ Use post-projection options:
 
 ## 4) ORBIT georef rejected?
 If ORBIT georef includes `transform_method` not equal to `homography`, COSMO will error (it expects a homography-style pixel→ground transform).
+
+## 5) Projection mismatch between georef and XODR?
+The georef `proj_string` and the OpenDRIVE `<geoReference>` must describe the same projection. Re-export
+both from ORBIT with the same projection.
+
+## 6) Timestamps drift or start time looks wrong?
+- Without `--srt`, the frame period comes from `--fps`, else the georef/calibration `fps`, else 30 fps; DJI video is
+  usually 29.97 fps. Pass the SRT of the annotated video ([SRT input](../reference/inputs-srt.md)).
+- A start-time warning between SRT and flight record usually means a wrong `--timezone`.
