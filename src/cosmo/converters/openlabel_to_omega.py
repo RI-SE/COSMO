@@ -379,56 +379,8 @@ def post_transform_xy(
 # Type/subtype/role helpers
 # -----------------------------------------------------------------------------
 
-def classify_openlabel_type(label_type: str) -> Tuple[int, str]:
-    lt = (label_type or "").strip().lower()
-    if lt in (
-        "car", "van", "taxi", "automobile", "truck", "bus", "railvehicle",
-        "bicycle", "cyclist", "motorcycle",
-    ):
-        return 2, "VEHICLE"
-    if lt in ("pedestrian", "human"):
-        return 3, "PEDESTRIAN"
-    if lt in ("animal",):
-        return 4, "ANIMAL"
-    if lt in ("unknown",):
-        return 0, "UNKNOWN"
-    return 1, "OTHER"
-
-
-VEHICLE_SUBTYPE_MAP: Dict[str, str] = {
-    "car": "CAR",
-    "truck": "TRUCK",
-    "bus": "BUS",
-    "bicycle": "BICYCLE",
-    "motorcycle": "MOTORCYCLE",
-    "van": "VAN",
-    "tram": "TRAM",
-    "train": "RAILVEHICLE",
-    "railvehicle": "RAILVEHICLE",
-    "tractor": "TRACTOR",
-    "trailer": "TRAILER",
-    "unknown": "UNKNOWN",
-    "other": "OTHER",
-}
-
-VEHICLE_ROLE_MAP: Dict[str, str] = {
-    "ego": "EGO",
-    "moving": "MOVING",
-    "parked": "PARKED",
-    "stopped": "STOPPED",
-    "standing": "PARKED",
-    "unknown": "UNKNOWN",
-}
-
-
-def normalize_subtype(subtype_in: Optional[str]) -> str:
-    s = (subtype_in or "").strip().lower()
-    return VEHICLE_SUBTYPE_MAP.get(s, "CAR")
-
-
-def normalize_role(role_in: Optional[str]) -> str:
-    r = (role_in or "").strip().lower()
-    return VEHICLE_ROLE_MAP.get(r, "MOVING")
+# OSI vehicle role used when the object class implies no specific role.
+DEFAULT_VEHICLE_ROLE = "CIVIL"
 
 
 def _canonical(name: str) -> str:
@@ -452,7 +404,7 @@ def build_enum_code_maps():
         if VR is not None:
             for m in VR:
                 vr_name_to_code[_canonical(m.name)] = m.value
-            vr_default = vr_name_to_code.get("CIVIL", vr_default)
+            vr_default = vr_name_to_code.get(DEFAULT_VEHICLE_ROLE, vr_default)
     return vt_name_to_code, vr_name_to_code, vt_default, vr_default
 
 
@@ -501,8 +453,6 @@ def parse_openlabel(ol: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Dict
             objects_meta[obj_id] = {
                 "name": obj.get("name", obj_id),
                 "type": obj.get("type", "other"),
-                "subtype": obj.get("subtype", None),
-                "role": obj.get("role", None),
             }
 
     frames_out: Dict[str, Dict[str, Any]] = {}
@@ -598,11 +548,7 @@ def convert_openlabel_to_omega(
     root = ol.get("openlabel", ol)
     towed_by = build_towed_by(root, objects_meta)
 
-    _ont_urls = [
-        url for url in (root.get("ontologies") or {}).values()
-        if isinstance(url, str) and url.startswith("http")
-    ]
-    mapper = OntologyMapper(_ont_urls)
+    mapper = OntologyMapper.from_openlabel(root)
     if georef_data_path and odr_path and os.path.isfile(odr_path):
         _check_proj_string_match(georef_data_path, odr_path)
 
@@ -677,10 +623,6 @@ def convert_openlabel_to_omega(
             return 0, k
 
     sorted_frames = sorted(((fid, _frame_key(fid)) for fid in frames.keys()), key=lambda t: t[1])
-
-    def _object_meta(oid: str) -> Tuple[str, str]:
-        meta = objects_meta.get(oid, {})
-        return normalize_subtype(meta.get("subtype")), normalize_role(meta.get("role"))
 
     def project_pixel_to_xyz(cx: float, cy: float) -> Tuple[float, float, float]:
         if H is not None:
@@ -825,7 +767,7 @@ def convert_openlabel_to_omega(
                     meta = objects_meta.get(oid, {})
                     label_type = meta.get("type", "other")
                     type_code, type_name_upper, subtype_upper = mapper.classify(label_type)
-                    role_upper = normalize_role(meta.get("role"))
+                    role_upper = mapper.role(label_type) or DEFAULT_VEHICLE_ROLE
                     vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                     vr_code = vr_name_to_code.get(role_upper, vr_default)
 
@@ -929,7 +871,7 @@ def convert_openlabel_to_omega(
                 meta = objects_meta.get(oid, {})
                 label_type = meta.get("type", "other")
                 type_code, type_name_upper, subtype_upper = mapper.classify(label_type)
-                role_upper = normalize_role(meta.get("role"))
+                role_upper = mapper.role(label_type) or DEFAULT_VEHICLE_ROLE
                 vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                 vr_code = vr_name_to_code.get(role_upper, vr_default)
 
