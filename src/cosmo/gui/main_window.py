@@ -209,6 +209,13 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.ed_calib, 3, 1)
         g.addWidget(self.btn_calib, 3, 2)
 
+        self.ed_srt = QtWidgets.QLineEdit()
+        self.ed_srt.setToolTip("Optional: frame timing and OSI environmental conditions (time, sun, illumination)")
+        self.btn_srt = QtWidgets.QToolButton(text="…")
+        g.addWidget(QtWidgets.QLabel("DJI SRT (optional .srt):"), 4, 0)
+        g.addWidget(self.ed_srt, 4, 1)
+        g.addWidget(self.btn_srt, 4, 2)
+
         # Alignment choice (simplified)
         self.rb_georef = QtWidgets.QRadioButton("Use ORBIT georef-data (recommended)")
         self.rb_calib = QtWidgets.QRadioButton("Use Calibration (legacy)")
@@ -220,7 +227,7 @@ class MainWindow(QtWidgets.QMainWindow):
         vb.addWidget(self.rb_none)
         gb_align = QtWidgets.QGroupBox("Alignment method")
         gb_align.setLayout(vb)
-        g.addWidget(gb_align, 4, 1, 1, 2)
+        g.addWidget(gb_align, 5, 1, 1, 2)
 
         # Output options (Option A + B)
         gb_out = QtWidgets.QGroupBox("Output (Option A: run folder; B: names from input)")
@@ -658,6 +665,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_odr.clicked.connect(self._pick_odr)
         self.btn_georef.clicked.connect(self._pick_georef)
         self.btn_calib.clicked.connect(self._pick_calib)
+        self.btn_srt.clicked.connect(self._pick_srt)
 
         self.btn_runs_base.clicked.connect(self._pick_runs_base)
         self.btn_runs_base_settings.clicked.connect(self._pick_runs_base_settings)
@@ -784,6 +792,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if fn:
             self.ed_calib.setText(fn)
             self.rb_calib.setChecked(True)
+
+    def _pick_srt(self):
+        fn = self._pick_file("Select DJI SRT", "SRT (*.srt *.SRT);;All files (*.*)")
+        if fn:
+            self.ed_srt.setText(fn)
 
     def _pick_runs_base(self):
         d = self._pick_dir("Select runs base directory")
@@ -1145,6 +1158,7 @@ class MainWindow(QtWidgets.QMainWindow):
             xy_offset=(float(self.sp_dx.value()), float(self.sp_dy.value())),
             yaw_offset_deg=float(self.sp_yaw_deg.value()),
             strip_xodr_namespace=self.chk_strip_xodr_ns.isChecked(),
+            srt=self.ed_srt.text().strip() or None,
             out_dir=runs_base,
             run_name=None,
         )
@@ -1507,6 +1521,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ed_odr.setText(self._settings.value("odr", ""))
         self.ed_georef.setText(self._settings.value("georef", ""))
         self.ed_calib.setText(self._settings.value("calib", ""))
+        self.ed_srt.setText(self._settings.value("srt", ""))
 
         runs_base = self._settings.value("runs_base", "")
         self.ed_runs_base.setText(runs_base)
@@ -1549,6 +1564,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._settings.setValue("odr", self.ed_odr.text().strip())
         self._settings.setValue("georef", self.ed_georef.text().strip())
         self._settings.setValue("calib", self.ed_calib.text().strip())
+        self._settings.setValue("srt", self.ed_srt.text().strip())
 
         self._settings.setValue("runs_base", self.ed_runs_base.text().strip())
         self._settings.setValue("autoscroll", self.chk_autoscroll.isChecked())

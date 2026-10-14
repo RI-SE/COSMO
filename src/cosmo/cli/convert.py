@@ -152,6 +152,14 @@ Examples:
     # Output formatting
     ap.add_argument("--json", action="store_true", help="Print result as JSON")
 
+    # Environmental conditions / timing
+    env = ap.add_argument_group("environmental conditions")
+    env.add_argument("--srt", metavar="PATH",
+                     help="DJI SRT subtitle file of the annotated video (per-frame time, GPS, exposure). "
+                          "Drives frame timing and OSI environmental_conditions")
+    env.add_argument("--timezone", default="Europe/Stockholm", metavar="IANA",
+                     help="Timezone of the SRT clock and for local time of day (default: Europe/Stockholm)")
+
     # Provenance
     prov = ap.add_argument_group("provenance")
     prov.add_argument("--prov-out", metavar="PATH", help="Write W3C-PROV provenance to this file (omit to skip)")
@@ -162,6 +170,9 @@ Examples:
                       help="Provenance file for --georef-data input (will be inlined into output DPR)")
     prov.add_argument("--flight-record-prov", metavar="PATH",
                       help="Provenance file for --flight-record input (will be inlined into output DPR)")
+    prov.add_argument("--srt-prov", metavar="PATH",
+                      help="Provenance file for --srt input, e.g. the DPR of the concatenated video "
+                           "(will be inlined into output DPR)")
 
     return ap
 
@@ -217,6 +228,7 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
         (args.georef_data, "json", args.georef_prov if args.georef_prov and Path(args.georef_prov).exists() else None),
         (args.calibration, "json", None),
         (args.flight_record, "json", args.flight_record_prov if args.flight_record_prov and Path(args.flight_record_prov).exists() else None),
+        (args.srt, "srt", args.srt_prov if args.srt_prov and Path(args.srt_prov).exists() else None),
     ]:
         if path:
             inputs.append(path)
@@ -285,6 +297,8 @@ def main(argv=None) -> int:
         stabilize_size=args.stabilize_size,
         country_code=args.country_code,
         object_frame=args.object_frame,
+        srt=args.srt,
+        timezone=args.timezone,
     )
 
     def _log(line: str) -> None:

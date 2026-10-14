@@ -45,7 +45,7 @@ _BUILTIN: dict[str, tuple[str, str]] = {
     "tram":                 ("VEHICLE",    "TRAM"),
     "train":                ("VEHICLE",    "TRAIN"),
     "caravan":              ("VEHICLE",    "TRAILER"),
-    "standupsscooter":      ("VEHICLE",    "STANDUP_SCOOTER"),
+    "standupscooter":       ("VEHICLE",    "STANDUP_SCOOTER"),
     "agriculturalvehicle":  ("VEHICLE",    "OTHER"),
     "constructionvehicle":  ("VEHICLE",    "OTHER"),
     "emergencyvehicle":     ("VEHICLE",    "OTHER"),
@@ -56,9 +56,20 @@ _BUILTIN: dict[str, tuple[str, str]] = {
     # Human branch
     "human":                ("PEDESTRIAN", "OTHER"),
     "pedestrian":           ("PEDESTRIAN", "OTHER"),
-    "wheelchairuser":       ("PEDESTRIAN", "WHEELCHAIR"),
+    # OSI models wheelchairs as a vehicle classification type, not a pedestrian
+    "wheelchairuser":       ("VEHICLE",    "WHEELCHAIR"),
     # Animal
     "animal":               ("ANIMAL",     "OTHER"),
+}
+
+# Label → MovingObjectVehicleClassificationRole name, for classes that imply a role.
+_BUILTIN_ROLE: dict[str, str] = {
+    "ambulance": "AMBULANCE",
+    "fire":      "FIRE",
+    "police":    "POLICE",
+    # Assumes buses/trams are in public service; private ones are rare in our data
+    "bus":       "PUBLIC_TRANSPORT",
+    "tram":      "PUBLIC_TRANSPORT",
 }
 
 # omega-prime MovingObjectType name → OSI numeric code
@@ -86,6 +97,7 @@ class OntologyMapper:
 
     def __init__(self, ontology_urls: Optional[list[str]] = None):
         self._map: dict[str, tuple[str, str]] = dict(_BUILTIN)
+        self._role_map: dict[str, str] = dict(_BUILTIN_ROLE)
         if ontology_urls and _RDFLIB:
             for url in ontology_urls:
                 try:
@@ -93,8 +105,17 @@ class OntologyMapper:
                 except Exception as exc:
                     print(f"[ontology_mapper] Could not load {url!r}: {exc}")
 
+    @classmethod
+    def from_openlabel(cls, root: dict) -> "OntologyMapper":
+        """Build a mapper from the http(s) ontology URLs declared in an OpenLABEL root."""
+        urls = [
+            url for url in (root.get("ontologies") or {}).values()
+            if isinstance(url, str) and url.startswith("http")
+        ]
+        return cls(urls)
+
     def _extend_from_ttl(self, url: str) -> None:
-        """Fetch TTL, walk subClassOf chains, extend self._map."""
+        """Fetch TTL, walk subClassOf chains, extend self._map and self._role_map."""
         g = _cached_graph(url)
 
         # Build URI → (rdfs:label, parent URI) maps
@@ -107,14 +128,14 @@ class OntologyMapper:
             elif p == RDFS.subClassOf:
                 uri_parent[s_str] = o_str
 
-        def _resolve(uri: str) -> tuple[str, str] | None:
-            """Walk up ancestry and return the deepest known mapping."""
+        def _resolve(uri: str, table: dict):
+            """Walk up ancestry and return the deepest known mapping in table."""
             cur, visited = uri, set()
             while cur and cur not in visited:
                 visited.add(cur)
                 lbl = uri_label.get(cur)
                 if lbl:
-                    entry = self._map.get(_norm(lbl))
+                    entry = table.get(_norm(lbl))
                     if entry:
                         return entry
                 cur = uri_parent.get(cur)
@@ -122,15 +143,20 @@ class OntologyMapper:
 
         for uri, lbl in uri_label.items():
             key = _norm(lbl)
-            if key not in self._map:
-                resolved = _resolve(uri_parent.get(uri, ""))
-                if resolved:
-                    self._map[key] = resolved
+            for table in (self._map, self._role_map):
+                if key not in table:
+                    resolved = _resolve(uri_parent.get(uri, ""), table)
+                    if resolved:
+                        table[key] = resolved
 
     def classify(self, label: str) -> tuple[int, str, str]:
         """Return (type_code, type_name, subtype_name) for an OpenLABEL type label."""
         type_name, subtype_name = self._map.get(_norm(label), ("OTHER", "OTHER"))
         return _TYPE_CODE.get(type_name, 1), type_name, subtype_name
+
+    def role(self, label: str) -> Optional[str]:
+        """Return the vehicle role name implied by the label, or None if the label implies none."""
+        return self._role_map.get(_norm(label))
 
 
 @lru_cache(maxsize=16)

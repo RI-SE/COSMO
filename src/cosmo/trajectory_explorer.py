@@ -14,6 +14,8 @@ import numpy as np
 import opendrive_map as odm
 import pandas as pd
 
+from cosmo.converters.ontology_mapper import OntologyMapper
+
 try:
     from PyQt5 import QtCore, QtGui, QtWidgets
 except ImportError:
@@ -293,25 +295,6 @@ def load_from_mcap(path: str) -> tuple[str | None, dict[int, dict]]:
     return xodr_xml, trajectories
 
 
-_OL_TYPE_MAP: dict[str, tuple[str, str]] = {
-    "car": ("VEHICLE", "CAR"), "van": ("VEHICLE", "VAN"),
-    "taxi": ("VEHICLE", "CAR"), "automobile": ("VEHICLE", "CAR"),
-    "truck": ("VEHICLE", "TRUCK"), "bus": ("VEHICLE", "BUS"),
-    "railvehicle": ("VEHICLE", "RAILVEHICLE"), "tram": ("VEHICLE", "RAILVEHICLE"),
-    "train": ("VEHICLE", "RAILVEHICLE"), "bicycle": ("VEHICLE", "BICYCLE"),
-    "cyclist": ("VEHICLE", "BICYCLE"), "motorcycle": ("VEHICLE", "MOTORCYCLE"),
-    "trailer": ("VEHICLE", "TRAILER"), "tractor": ("VEHICLE", "TRACTOR"),
-    "pedestrian": ("PEDESTRIAN", "OTHER"), "human": ("PEDESTRIAN", "OTHER"),
-    "animal": ("ANIMAL", "OTHER"),
-    "unknown": ("UNKNOWN", "OTHER"),
-}
-
-
-def _classify_openlabel_type(label_type: str) -> tuple[str, str]:
-    """Map raw OpenLabel type string to (category, subtype) matching CSV/MCAP hierarchy."""
-    return _OL_TYPE_MAP.get(label_type.strip().lower(), ("OTHER", "OTHER"))
-
-
 class NeedsFpsError(Exception):
     """Raised when OpenLabel has no timestamps and fps is needed."""
 
@@ -344,9 +327,11 @@ def load_from_openlabel(path: str, fps: float | None = None) -> dict[int, dict]:
 
     root = data.get("openlabel", data)
 
+    mapper = OntologyMapper.from_openlabel(root)
     obj_meta: dict[str, tuple[str, str]] = {}
     for oid_str, obj in root.get("objects", {}).items():
-        obj_meta[oid_str] = _classify_openlabel_type(obj.get("type", ""))
+        _, type_name, subtype_name = mapper.classify(obj.get("type", ""))
+        obj_meta[oid_str] = (type_name, subtype_name)
 
     frames_dict = root.get("frames", {})
 

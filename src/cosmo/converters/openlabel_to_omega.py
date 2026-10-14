@@ -51,6 +51,17 @@ try:
 except ImportError:  # pragma: no cover
     _read_map_offset = None
 
+from cosmo.converters.environment import (
+    DEFAULT_TIMEZONE,
+    EnvironmentSources,
+    FrameClock,
+    build_environmental_conditions,
+    clock_from_srt,
+    environment_fields,
+    load_weather,
+    parse_srt,
+    read_flight_record_meta,
+)
 from cosmo.converters.ontology_mapper import OntologyMapper
 
 # -----------------------------------------------------------------------------
@@ -266,6 +277,52 @@ def _read_georef_geo(georef_data_path: Optional[str]) -> Tuple[Optional[str], Op
     return proj_string, point.get("latitude"), point.get("longitude")
 
 
+def load_environment_sources(
+    root: Dict[str, Any],
+    fps: float,
+    srt_path: Optional[str],
+    timezone_name: str,
+    flight_record_path: Optional[str],
+    flight_record_sequence: int,
+    georef_data_path: Optional[str],
+    log: Callable[[str], None],
+) -> EnvironmentSources:
+    """Collect the optional time/position/weather sources; the SRT clock takes precedence over the flight record."""
+    clock: Optional[FrameClock] = None
+    srt_by_frame = None
+    fr_start, fr_lat, fr_lon = (None, None, None)
+    if flight_record_path and os.path.isfile(flight_record_path):
+        fr_start, fr_lat, fr_lon = read_flight_record_meta(flight_record_path, flight_record_sequence)
+
+    if srt_path:
+        srt_frames = parse_srt(srt_path)
+        if len(srt_frames) < 2:
+            raise ValueError(f"SRT {srt_path!r} has fewer than two parsable entries")
+        clock = clock_from_srt(srt_frames, timezone_name)
+        srt_by_frame = {f.frame_idx: f for f in srt_frames}
+        log(f"[COSMO] SRT clock: start={clock.t0_utc.isoformat()}, fps={1.0 / clock.period_s:.3f}, "
+            f"max residual={clock.max_residual_s * 1000:.1f} ms")
+        if clock.max_residual_s > clock.period_s:
+            log("[COSMO] Warning: SRT times deviate from a constant frame rate by more than one frame "
+                "(dropped frames or clock jump?)")
+        if fr_start and abs((fr_start - clock.t0_utc).total_seconds()) > 5.0:
+            log(f"[COSMO] Warning: flight-record start {fr_start.isoformat()} differs from SRT start by "
+                f"more than 5 s; check --timezone ({timezone_name})")
+    elif fr_start:
+        clock = FrameClock(fr_start, 1.0 / fps)
+        log(f"[COSMO] Absolute time from flight record start {fr_start.isoformat()} (no SRT)")
+
+    lat_lon = (fr_lat, fr_lon) if fr_lat is not None and fr_lon is not None else None
+    if lat_lon is None:
+        _, g_lat, g_lon = _read_georef_geo(georef_data_path)
+        lat_lon = (g_lat, g_lon) if g_lat is not None and g_lon is not None else None
+
+    return EnvironmentSources(
+        weather=load_weather(root), clock=clock, srt_by_frame=srt_by_frame,
+        lat_lon=lat_lon, tz_name=timezone_name,
+    )
+
+
 def _resolve_country_code(
     country_code: Optional[int],
     lat: Optional[float],
@@ -379,56 +436,8 @@ def post_transform_xy(
 # Type/subtype/role helpers
 # -----------------------------------------------------------------------------
 
-def classify_openlabel_type(label_type: str) -> Tuple[int, str]:
-    lt = (label_type or "").strip().lower()
-    if lt in (
-        "car", "van", "taxi", "automobile", "truck", "bus", "railvehicle",
-        "bicycle", "cyclist", "motorcycle",
-    ):
-        return 2, "VEHICLE"
-    if lt in ("pedestrian", "human"):
-        return 3, "PEDESTRIAN"
-    if lt in ("animal",):
-        return 4, "ANIMAL"
-    if lt in ("unknown",):
-        return 0, "UNKNOWN"
-    return 1, "OTHER"
-
-
-VEHICLE_SUBTYPE_MAP: Dict[str, str] = {
-    "car": "CAR",
-    "truck": "TRUCK",
-    "bus": "BUS",
-    "bicycle": "BICYCLE",
-    "motorcycle": "MOTORCYCLE",
-    "van": "VAN",
-    "tram": "TRAM",
-    "train": "RAILVEHICLE",
-    "railvehicle": "RAILVEHICLE",
-    "tractor": "TRACTOR",
-    "trailer": "TRAILER",
-    "unknown": "UNKNOWN",
-    "other": "OTHER",
-}
-
-VEHICLE_ROLE_MAP: Dict[str, str] = {
-    "ego": "EGO",
-    "moving": "MOVING",
-    "parked": "PARKED",
-    "stopped": "STOPPED",
-    "standing": "PARKED",
-    "unknown": "UNKNOWN",
-}
-
-
-def normalize_subtype(subtype_in: Optional[str]) -> str:
-    s = (subtype_in or "").strip().lower()
-    return VEHICLE_SUBTYPE_MAP.get(s, "CAR")
-
-
-def normalize_role(role_in: Optional[str]) -> str:
-    r = (role_in or "").strip().lower()
-    return VEHICLE_ROLE_MAP.get(r, "MOVING")
+# OSI vehicle role used when the object class implies no specific role.
+DEFAULT_VEHICLE_ROLE = "CIVIL"
 
 
 def _canonical(name: str) -> str:
@@ -452,7 +461,7 @@ def build_enum_code_maps():
         if VR is not None:
             for m in VR:
                 vr_name_to_code[_canonical(m.name)] = m.value
-            vr_default = vr_name_to_code.get("CIVIL", vr_default)
+            vr_default = vr_name_to_code.get(DEFAULT_VEHICLE_ROLE, vr_default)
     return vt_name_to_code, vr_name_to_code, vt_default, vr_default
 
 
@@ -501,8 +510,6 @@ def parse_openlabel(ol: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Dict
             objects_meta[obj_id] = {
                 "name": obj.get("name", obj_id),
                 "type": obj.get("type", "other"),
-                "subtype": obj.get("subtype", None),
-                "role": obj.get("role", None),
             }
 
     frames_out: Dict[str, Dict[str, Any]] = {}
@@ -576,6 +583,10 @@ def convert_openlabel_to_omega(
     stabilize_size: bool = False,
     country_code: Optional[int] = None,
     object_frame: str = "global",
+    srt_path: Optional[str] = None,
+    timezone_name: str = DEFAULT_TIMEZONE,
+    flight_record_path: Optional[str] = None,
+    flight_record_sequence: int = 0,
 ):
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP.
@@ -598,11 +609,7 @@ def convert_openlabel_to_omega(
     root = ol.get("openlabel", ol)
     towed_by = build_towed_by(root, objects_meta)
 
-    _ont_urls = [
-        url for url in (root.get("ontologies") or {}).values()
-        if isinstance(url, str) and url.startswith("http")
-    ]
-    mapper = OntologyMapper(_ont_urls)
+    mapper = OntologyMapper.from_openlabel(root)
     if georef_data_path and odr_path and os.path.isfile(odr_path):
         _check_proj_string_match(georef_data_path, odr_path)
 
@@ -666,9 +673,18 @@ def convert_openlabel_to_omega(
     ]
     csv_rows: List[List[Any]] = []
 
-    last_positions: Dict[int, Tuple[float, float, float]] = {}
+    # Per object: last (x, y, z, t_sec) and last velocity; kinematics use the real time
+    # step so frame gaps in an object's track don't inflate velocity.
+    last_positions: Dict[int, Tuple[float, float, float, float]] = {}
     last_velocities: Dict[int, Tuple[float, float, float]] = {}
     dt = 1.0 / fps if fps > 0 else 1.0 / 30.0
+
+    env_sources = load_environment_sources(
+        root, 1.0 / dt, srt_path, timezone_name,
+        flight_record_path, flight_record_sequence, georef_data_path, _log,
+    )
+    if srt_path and env_sources.clock is not None:
+        dt = env_sources.clock.period_s
 
     def _frame_key(k: str) -> Tuple[int, str]:
         try:
@@ -677,10 +693,17 @@ def convert_openlabel_to_omega(
             return 0, k
 
     sorted_frames = sorted(((fid, _frame_key(fid)) for fid in frames.keys()), key=lambda t: t[1])
+    if env_sources.srt_by_frame is not None and sorted_frames:
+        last_frame = sorted_frames[-1][1][0]
+        if last_frame not in env_sources.srt_by_frame:
+            _log(f"[COSMO] Warning: OpenLABEL frame {last_frame} has no SRT entry; "
+                 "is the SRT from the same (untrimmed) video?")
 
-    def _object_meta(oid: str) -> Tuple[str, str]:
-        meta = objects_meta.get(oid, {})
-        return normalize_subtype(meta.get("subtype")), normalize_role(meta.get("role"))
+    def _frame_number(seq_idx: int, frame_key: Tuple[int, str]) -> int:
+        """Video frame number; falls back to sequence position for non-numeric frame keys."""
+        if isinstance(frame_key[0], int) and (seq_idx == 0 or frame_key[0] != 0):
+            return frame_key[0]
+        return seq_idx
 
     def project_pixel_to_xyz(cx: float, cy: float) -> Tuple[float, float, float]:
         if H is not None:
@@ -703,22 +726,23 @@ def convert_openlabel_to_omega(
         height = _resolve_height(label_type, obj_uid, towed_by, defaults)
         return length, width, height
 
-    def compute_kinematics(idx: int, X: float, Y: float, Z: float) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+    def compute_kinematics(idx: int, X: float, Y: float, Z: float, t_sec: float) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
         last_p = last_positions.get(idx)
-        if last_p is None:
+        step = t_sec - last_p[3] if last_p is not None else 0.0
+        if last_p is None or step <= 0:
             vel = (0.0, 0.0, 0.0)
             acc = (0.0, 0.0, 0.0)
         else:
-            vel = ((X - last_p[0]) / dt, (Y - last_p[1]) / dt, (Z - last_p[2]) / dt)
+            vel = ((X - last_p[0]) / step, (Y - last_p[1]) / step, (Z - last_p[2]) / step)
             last_v = last_velocities.get(idx)
             if last_v is None:
                 acc = (0.0, 0.0, 0.0)
             else:
-                acc = ((vel[0] - last_v[0]) / dt, (vel[1] - last_v[1]) / dt, (vel[2] - last_v[2]) / dt)
+                acc = ((vel[0] - last_v[0]) / step, (vel[1] - last_v[1]) / step, (vel[2] - last_v[2]) / step)
         return vel, acc
 
-    def update_caches(idx: int, X: float, Y: float, Z: float, vel: Tuple[float, float, float]):
-        last_positions[idx] = (X, Y, Z)
+    def update_caches(idx: int, X: float, Y: float, Z: float, vel: Tuple[float, float, float], t_sec: float):
+        last_positions[idx] = (X, Y, Z, t_sec)
         last_velocities[idx] = vel
 
     def _collect_all_dims() -> Dict[str, Tuple[float, float, float]]:
@@ -772,7 +796,7 @@ def convert_openlabel_to_omega(
     _gt_proj_string = None
     _gt_country_code = 0
 
-    def _write_ground_truth(writer_mcap, t_sec: float, total_nanos: int, moving_objects_osi: List[Any]):
+    def _write_ground_truth(writer_mcap, t_sec: float, total_nanos: int, moving_objects_osi: List[Any], frame_no: int):
         gt = betterosi.GroundTruth(
             version=betterosi.InterfaceVersion(version_major=3, version_minor=7, version_patch=0),
             timestamp=betterosi.Timestamp(
@@ -786,6 +810,9 @@ def convert_openlabel_to_omega(
             gt.proj_string = _gt_proj_string
         if _gt_country_code:
             gt.country_code = _gt_country_code
+        env = build_environmental_conditions(betterosi, environment_fields(frame_no, env_sources))
+        if env is not None:
+            gt.environmental_conditions = env
         if object_frame == "local" and any(frame_off):
             # OSI: world = proj_frame_offset + osi, then proj_string. Records the
             # local→projected-CRS shift so local coords stay fully georeferenced.
@@ -810,10 +837,8 @@ def convert_openlabel_to_omega(
             for seq_idx, (frame_id, frame_key) in enumerate(sorted_frames):
                 frame = frames[frame_id]
 
-                if isinstance(frame_key[0], int) and (seq_idx == 0 or frame_key[0] != 0):
-                    t_sec = frame_key[0] * dt
-                else:
-                    t_sec = seq_idx * dt
+                frame_no = _frame_number(seq_idx, frame_key)
+                t_sec = frame_no * dt
                 total_nanos = to_nanos(t_sec)
 
                 moving_objects_osi = []
@@ -825,7 +850,7 @@ def convert_openlabel_to_omega(
                     meta = objects_meta.get(oid, {})
                     label_type = meta.get("type", "other")
                     type_code, type_name_upper, subtype_upper = mapper.classify(label_type)
-                    role_upper = normalize_role(meta.get("role"))
+                    role_upper = mapper.role(label_type) or DEFAULT_VEHICLE_ROLE
                     vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                     vr_code = vr_name_to_code.get(role_upper, vr_default)
 
@@ -855,7 +880,7 @@ def convert_openlabel_to_omega(
                     if stabilize_size:
                         length, width, height = size_avg.get(oid, (length, width, height))
 
-                    vel, acc = compute_kinematics(idx, X, Y, Z)
+                    vel, acc = compute_kinematics(idx, X, Y, Z, t_sec)
                     yaw = angle_wrap(heading_world + float(yaw_offset_rad))
 
                     csv_rows.append([
@@ -908,18 +933,15 @@ def convert_openlabel_to_omega(
                     mo = betterosi.MovingObject(**mo_kwargs)
                     moving_objects_osi.append(mo)
 
-                    update_caches(idx, X, Y, Z, vel)
+                    update_caches(idx, X, Y, Z, vel, t_sec)
 
-                _write_ground_truth(writer_mcap, t_sec, total_nanos, moving_objects_osi)
+                _write_ground_truth(writer_mcap, t_sec, total_nanos, moving_objects_osi, frame_no)
 
     else:
         # MCAP disabled or betterosi missing — still produce CSV rows
         for seq_idx, (frame_id, frame_key) in enumerate(sorted_frames):
             frame = frames[frame_id]
-            if isinstance(frame_key[0], int) and (seq_idx == 0 or frame_key[0] != 0):
-                t_sec = frame_key[0] * dt
-            else:
-                t_sec = seq_idx * dt
+            t_sec = _frame_number(seq_idx, frame_key) * dt
             total_nanos = to_nanos(t_sec)
 
             for oid, od in frame["objects"].items():
@@ -929,7 +951,7 @@ def convert_openlabel_to_omega(
                 meta = objects_meta.get(oid, {})
                 label_type = meta.get("type", "other")
                 type_code, type_name_upper, subtype_upper = mapper.classify(label_type)
-                role_upper = normalize_role(meta.get("role"))
+                role_upper = mapper.role(label_type) or DEFAULT_VEHICLE_ROLE
                 vt_code = vt_name_to_code.get(subtype_upper, vt_default)
                 vr_code = vr_name_to_code.get(role_upper, vr_default)
 
@@ -959,7 +981,7 @@ def convert_openlabel_to_omega(
                 if stabilize_size:
                     length, width, height = size_avg.get(oid, (length, width, height))
 
-                vel, acc = compute_kinematics(idx, X, Y, Z)
+                vel, acc = compute_kinematics(idx, X, Y, Z, t_sec)
                 yaw = angle_wrap(heading_world + float(yaw_offset_rad))
 
                 csv_rows.append([
@@ -972,7 +994,7 @@ def convert_openlabel_to_omega(
                     type_name_upper, subtype_upper, role_upper,
                 ])
 
-                update_caches(idx, X, Y, Z, vel)
+                update_caches(idx, X, Y, Z, vel, t_sec)
 
     # Write CSV
     if write_csv:

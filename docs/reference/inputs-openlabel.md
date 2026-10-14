@@ -12,9 +12,15 @@ COSMO looks for rbbox values under:
 - `...rbbox.shape.val` (supported variant)
 
 ## Optional object metadata
-If present under `openlabel.objects`, COSMO uses:
-- `type` (e.g., car, truck, pedestrian)
-- optional `subtype` and `role` (mapped to OSI-like naming/codes when possible)
+If present under `openlabel.objects`, COSMO uses `type` (an ontology class such as Car, Truck,
+Pedestrian). It is mapped to OSI type, vehicle classification and role; see the object class table in
+the main README. Ontology URLs in `openlabel.ontologies` extend the mapping (needs `rdflib`).
+
+## Optional weather annotation
+`openlabel.contexts[*]` of type `WeatherContext` (per frame interval) and `openlabel.tags[*]` of type
+`WeatherTag` (whole sequence) fill OSI precipitation, fog and cloud cover. Used fields:
+`precipitation`, `precipitation_intensity`, `visibility_km`, `cloud_cover`. Other tags (road, junction,
+traffic, structures, notes) are not exported.
 ## Confidence
 COSMO can read confidence from:
 `object_data.vec.confidence.val` (if present).

@@ -14,6 +14,7 @@
 ## Reference
 - [OpenLABEL expectations](reference/inputs-openlabel.md)
 - [OpenDRIVE input](reference/inputs-opendrive.md)
+- [DJI SRT input](reference/inputs-srt.md)
 - [Outputs (CSV/MCAP)](reference/outputs-omega-prime.md)
 - [OSI/MCAP topics](reference/osi-mcap.md)
 
