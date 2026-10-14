@@ -33,7 +33,12 @@ type_name, subtype_name, role_name
 Notes:
 
 * idx is a stable integer ID assigned by sorting object IDs and numbering from 1.
-* Kinematics (vel_*, acc_*) are estimated from frame-to-frame differences using FPS.
+* Kinematics (vel_*, acc_*) are estimated from differences between an object's consecutive appearances,
+  divided by the real time step (frame period from `--srt`, else FPS).
+* role/role_name: OSI vehicle role implied by the class (e.g. PUBLIC_TRANSPORT for Bus), else CIVIL.
+
+Each `ground_truth` message also carries `environmental_conditions` when sources are available
+(time, sun, illumination, precipitation, fog, clouds); see the Transformations section in the main README.
 
 
 ## MCAP / OSI (optional)

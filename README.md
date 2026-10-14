@@ -91,6 +91,87 @@ cosmo convert scenario.json \
   -o runs/
 ```
 ---
+## Transformations (OpenLABEL → Omega‑Prime CSV / OSI)
+
+`cosmo convert` maps each OpenLABEL frame to one OSI `GroundTruth` (and CSV rows). Optional inputs
+add data; a field is only written when its source is available.
+
+### Geometry and kinematics
+| Output | Derived from |
+|---|---|
+| Position x, y | rbbox centre (pixels) through the pixel→ground homography (`--georef-data`, else `--calibration`), then `--xy-offset/--swap-xy/--flip-*`. Without either: debug fallback `px × 0.01`, z = 0. With `cosmo correct` output: the corrected cuboid position. |
+| Heading (yaw) | `−r_image + direction of image +x in the world` at the box position, wrapped to (−π, π] |
+| Length, width | rbbox corners projected to the ground, measured along the heading; without a homography: class defaults |
+| Height | class default (car 1.5 m, van 2.2 m, truck 3.5 m, bus 3.2 m, pedestrian 1.7 m, other 1.5 m; overridable via `default_dimensions_m` in the georef/calibration file). Trailers use the height of the towing vehicle (`towed-by` relation). |
+| Timestamp | frame number × frame period. Period: from `--srt` (fitted to the SRT clock), else fps from georef / calibration / `--fps`, else 30 fps. Relative to video frame 0. |
+| Velocity, acceleration | finite differences between an object's consecutive appearances, divided by the real time step (frame gaps are handled) |
+
+### Object classes
+Classes are resolved by `OntologyMapper` (`src/cosmo/converters/ontology_mapper.py`): a built-in table for the
+SAVANT ontology 1.3.1, extended at run time with the ontology URLs declared in the OpenLABEL file (needs `rdflib`);
+a class missing from the table inherits the mapping of its nearest mapped ancestor (`rdfs:subClassOf`). Unknown
+classes become OTHER. Vehicle classification is only written for type VEHICLE.
+
+| OpenLABEL class | OSI MovingObject type | Vehicle classification type | Vehicle role |
+|---|---|---|---|
+| Car | VEHICLE | CAR | CIVIL |
+| Van | VEHICLE | DELIVERY_VAN | CIVIL |
+| Truck | VEHICLE | HEAVY_TRUCK | CIVIL |
+| Trailer, Caravan | VEHICLE | TRAILER | CIVIL |
+| Bus | VEHICLE | BUS | PUBLIC_TRANSPORT ¹ |
+| Tram | VEHICLE | TRAM | PUBLIC_TRANSPORT ¹ |
+| Train | VEHICLE | TRAIN | CIVIL |
+| Motorbike | VEHICLE | MOTORBIKE | CIVIL |
+| Bicycle | VEHICLE | BICYCLE | CIVIL |
+| StandupScooter | VEHICLE | STANDUP_SCOOTER | CIVIL |
+| WheelChairUser | VEHICLE ² | WHEELCHAIR | CIVIL |
+| Ambulance | VEHICLE | OTHER | AMBULANCE |
+| Fire | VEHICLE | OTHER | FIRE |
+| Police | VEHICLE | OTHER | POLICE |
+| Vehicle, EmergencyVehicle, AgriculturalVehicle, ConstructionVehicle, SlowMovingVehicle | VEHICLE | OTHER | CIVIL |
+| Human, Pedestrian | PEDESTRIAN | – | – |
+| Animal | ANIMAL | – | – |
+| RoadUser, DynamicObject, unknown | OTHER | – | – |
+
+¹ Assumes buses and trams are in public service.
+² OSI models wheelchairs only as a vehicle classification type, so wheelchair users are exported as vehicles.
+
+The CSV `role`/`role_name` columns carry the same role for every object (CIVIL when the class implies none).
+
+### Environmental conditions (`GroundTruth.environmental_conditions`, MCAP only)
+| OSI field | Source | Mapping |
+|---|---|---|
+| `unix_timestamp` | `--srt` clock, else `--flight-record` `time_range.start` + frame period | UTC seconds per frame |
+| `time_of_day.seconds_since_midnight` | same as above | local time in `--timezone` (default Europe/Stockholm) |
+| `sun.azimuth`, `sun.elevation` | time above + position: SRT GPS per frame, else flight-record mean lat/lon, else georef `reference_point` | NOAA solar position, no refraction. OSI azimuth is counterclockwise from north (west = +π/2). |
+| `ambient_illumination` | `--srt` exposure (ISO, shutter, f-number, EV compensation) | lux ≈ 2.5·2^EV100 (reflected-light estimate, about ±1 level) → OSI LEVEL1–9 lux bands |
+| `precipitation` | OpenLABEL weather annotation ³ | `precipitation=none` → NONE; intensity light/moderate/heavy → LIGHT/MODERATE/HEAVY; otherwise UNKNOWN |
+| `fog` | OpenLABEL weather `visibility_km` ³ | OSI visibility bands (≥40 km EXCELLENT, 10–40 GOOD, 4–10 MODERATE, 2–4 POOR, 1–2 MIST, 0.2–1 LIGHT, 0.05–0.2 THICK, <0.05 DENSE) |
+| `clouds.fractional_cloud_cover` | OpenLABEL weather `cloud_cover` ³ | clear → ZERO_OKTAS, partly_cloudy → FOUR_OKTAS (assumed 3–5 oktas), overcast → EIGHT_OKTAS |
+| temperature, pressure, humidity, wind | – | not set (no source yet) |
+
+³ `WeatherContext` (per frame interval) takes precedence over the sequence-level `WeatherTag`; both are written by
+SAVANT markit's VLM analysis.
+
+Not exported: the road, junction, traffic, structures, notes and VLM-analysis tags. Road and junction layout is in the
+embedded OpenDRIVE map; the rest has no OSI field.
+
+Example with all optional time/environment inputs (DJI drone folder layout):
+
+```bash
+cosmo convert An_VIDa_<ts>_D.json \
+  --georef-data drone_processed/sequenceN/VIDr_ff_<ts>_georef.json \
+  --odr map.xodr \
+  --flight-record drone_concatenated/sequenceN/FlightRecord_<ts>.video_stats.json \
+  --srt drone_concatenated/sequenceN/VIDc_<ts>_D.srt \
+  --srt-prov drone_concatenated/sequenceN/DPR_VIDc_<ts>_D.json \
+  --output-prefix out/OmegaPrime_<name> --prov-out out/DPR_OmegaPrime_<name>.json
+```
+
+The SRT must belong to the video that was annotated (frame N of the OpenLABEL file = SRT `FrameCnt` N+1). See
+[SRT input](docs/reference/inputs-srt.md).
+
+---
 ## Optional preprocessing: correct oblique-drone bboxes
 
 For footage from an oblique (tilted) drone camera, object bounding boxes are
@@ -144,6 +225,7 @@ It needs the GUI dependencies (PyQt5); install its dependency group with
 * Reference:
   - [OpenLABEL input](docs/reference/inputs-openlabel.md)
   - [OpenDRIVE input](docs/reference/inputs-opendrive.md)
+  - [DJI SRT input](docs/reference/inputs-srt.md)
   - [Outputs (CSV/MCAP)](docs/reference/outputs-omega-prime.md)
   - [OSI/MCAP topics](docs/reference/osi-mcap.md)
 * Developer guide:

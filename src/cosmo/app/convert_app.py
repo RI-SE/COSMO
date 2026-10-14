@@ -53,6 +53,11 @@ class ConvertConfig:
     hfov_deg: Optional[float] = None
     use_gps_cam_pos: bool = False
 
+    # environmental conditions / timing: DJI SRT gives per-frame time, GPS and exposure;
+    # the flight record (above) gives start time and position when no SRT is given
+    srt: Optional[str] = None
+    timezone: str = "Europe/Stockholm"  # IANA zone of the SRT clock and for local time of day
+
     # size stabilization
     stabilize_size: bool = False
 
@@ -282,6 +287,10 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         stabilize_size=cfg.stabilize_size,
         country_code=cfg.country_code,
         object_frame=cfg.object_frame,
+        srt_path=str(Path(cfg.srt).expanduser().resolve()) if cfg.srt else None,
+        timezone_name=cfg.timezone,
+        flight_record_path=str(Path(cfg.flight_record).expanduser().resolve()) if cfg.flight_record else None,
+        flight_record_sequence=cfg.flight_record_sequence,
     )
 
     # determine produced outputs

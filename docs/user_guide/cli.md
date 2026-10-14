@@ -62,6 +62,23 @@ cosmo convert scenario.json \
   -o runs/
 ```
 Available flags: `--swap-xy`, `--flip-x`, `--flip-y`, `--xy-offset DX DY`, `--yaw-offset-deg DEG`.
+### Frame timing and environmental conditions (optional)
+```bash
+cosmo convert scenario.json \
+  --georef-data path/to/*_georef_data.json \
+  --flight-record path/to/FlightRecord_*.video_stats.json \
+  --srt path/to/VIDc_*.srt --srt-prov path/to/DPR_VIDc_*.json \
+  -o runs/
+```
+- `--srt PATH`: DJI SRT of the annotated video. Sets the frame period (replaces fps) and per-frame
+  absolute time, sun position and ambient illumination in OSI `environmental_conditions`.
+- `--timezone IANA`: timezone of the SRT clock and for local time of day (default `Europe/Stockholm`).
+- `--flight-record PATH`: without `--srt`, gives start time and position for time of day and sun position.
+- `--srt-prov PATH`: provenance of the SRT, inlined into `--prov-out` (like `--flight-record-prov`).
+
+Weather from the OpenLABEL `WeatherContext`/`WeatherTag` is always used when present. See the
+Transformations section in the main README and [SRT input](../reference/inputs-srt.md).
+
 ### Run naming & JSON output
 ```bash
 cosmo convert scenario.json --run-name saro_roundabout -o runs/

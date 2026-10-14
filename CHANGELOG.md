@@ -1,0 +1,120 @@
+# Changelog
+
+All notable changes to COSMO are documented here. Format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
+
+> **Note:** entries for 0.1.0 – 0.5.0 were reconstructed after the fact (2026-10) from the git history
+> (commits where `version` changed in `pyproject.toml`, and the commits between them). Dates are those
+> commit dates. They are best-effort summaries and may be incomplete.
+
+## [0.6.0] – unreleased
+
+### Added
+- OSI `GroundTruth.environmental_conditions` in the MCAP output, filled per frame from optional sources:
+  - `unix_timestamp` and local `time_of_day` from the DJI SRT (`--srt`), else the flight record start time.
+  - Sun azimuth/elevation (in-house NOAA algorithm; OSI convention: counterclockwise from north).
+  - `ambient_illumination` estimated from the SRT camera exposure (ISO, shutter, f-number, EV).
+  - `precipitation`, `fog` (from visibility) and cloud cover from the OpenLABEL `WeatherContext`/`WeatherTag`.
+- `cosmo convert` options `--srt`, `--srt-prov` (recorded in dataprov) and `--timezone` (default `Europe/Stockholm`).
+- SRT file picker in the GUI convert tab.
+- OSI vehicle roles from the object class: Ambulance/Fire/Police → AMBULANCE/FIRE/POLICE, Bus/Tram →
+  PUBLIC_TRANSPORT; all other vehicles CIVIL. Subclasses inherit roles via the ontology.
+- `OntologyMapper.from_openlabel()`; README "Transformations" section; `docs/reference/inputs-srt.md`;
+  `development.md` with open items.
+
+### Changed
+- With `--srt`, the frame period is fitted to the SRT clock (e.g. 29.97 fps) instead of fps from
+  georef/calibration/default 30 fps. Removes timestamp drift (~1.3 s over 22 min at 29.97 vs 30 fps).
+- WheelChairUser is exported as VEHICLE / WHEELCHAIR (OSI models wheelchairs as a vehicle classification),
+  previously PEDESTRIAN.
+- CSV `role_name` is now the OSI role (CIVIL etc.) instead of the movement state MOVING.
+- The trajectory explorer uses `OntologyMapper`, so its type/subtype names match the CSV/MCAP output.
+- The flight record (`--flight-record`) is also used by convert for start time and position, not only for
+  bbox correction.
+- CI uses uv for dependency installation.
+
+### Fixed
+- StandupScooter was not mapped (typo in the built-in table) and became VEHICLE/OTHER or OTHER/OTHER.
+- Velocity/acceleration across frame gaps in an object's track used a single-frame time step,
+  overestimating speed by the gap length.
+
+### Removed
+- Unused mapping code: `classify_openlabel_type`, `VEHICLE_SUBTYPE_MAP`, `normalize_subtype`,
+  `VEHICLE_ROLE_MAP`/`normalize_role` (movement states that never matched OSI roles), and the trajectory
+  explorer's own `_OL_TYPE_MAP`.
+- Reading of the non-standard per-object OpenLABEL `subtype`/`role` fields.
+
+## [0.5.0] – 2026-06-29 (reconstructed)
+
+### Changed
+- Pixel→ground georeferencing uses the shared `orbit-georef` library instead of COSMO's own code.
+- OpenDRIVE handling (convert and trajectory explorer, including parking spaces) uses the shared
+  `opendrive-map` library.
+
+### Added
+- `--object-frame {global,local}`: local map-frame output with the offset recorded in OSI `proj_frame_offset`.
+
+### Fixed
+- Trajectory explorer clear bug.
+- Removed internal references from docs; fixed docs links and CI triggers; updated `environment.yml` and
+  contributing instructions.
+
+## [0.4.1] – 2026-06-22 (reconstructed)
+
+### Added
+- OSI GroundTruth `proj_string` (from the georef file) and `country_code` (`--country-code`, else derived
+  from the georef position).
+- Documentation updates: installation instructions, trajectory explorer, links to ORBIT, license info.
+
+## [0.4.0] – 2026-06-22 (reconstructed)
+
+### Changed
+- README update (version bump without code changes in `src/`).
+
+## [0.3.3] – 2026-06-18 (reconstructed)
+
+### Fixed
+- Conversion of OpenLABEL files with objects that appear in frames but not in the objects section
+  (orphan frame objects).
+
+## [0.3.2] – 2026-06-18 (reconstructed)
+
+### Added
+- `--opendrive-prov` provenance input for the OpenDRIVE map.
+- Loading dialog in the trajectory explorer.
+
+### Fixed
+- MCAP loading bug in the trajectory explorer.
+- Performance optimizations for bbox correction.
+
+## [0.3.1] – 2026-05-08 (reconstructed)
+
+### Added
+- `--output-prefix` to write `<prefix>.csv/.mcap` directly, bypassing the run folder.
+- `--georef-prov` and `--flight-record-prov`: upstream provenance of these inputs is inlined into the output DPR.
+
+## [0.3.0] – 2026-05-06 (reconstructed)
+
+### Added
+- `cosmo correct`: oblique-drone bbox correction (analytical and 3D modes) using the flight record
+  (`corrections/drone_camera.py`, `corrections/oblique.py`), with `--stabilize-size` and `--use-gps-cam-pos`.
+- Provenance recording with the dataprov library (`--prov-in`, `--prov-out`).
+- Trajectory explorer with up to three inputs (CSV, MCAP, OpenLABEL).
+
+## [0.2.0] – 2026-04-03 (reconstructed)
+
+### Added
+- Package structure with app/CLI/GUI layers: `cosmo convert`, `cosmo calibrate`, Qt GUI (calibration
+  editor, conversion, Altair/matplotlib plots).
+- `OntologyMapper`: OpenLABEL class → OSI type/subtype via the SAVANT ontology.
+- MCAP input for the trajectory explorer; UTM output in geopos files; `--strip-xodr-namespace`.
+- CI tests and documentation.
+
+### Fixed
+- Type/subtype conversion from SAVANT OpenLABEL to MCAP.
+
+## [0.1.0] – 2026-02-05 (reconstructed)
+
+### Added
+- First packaged version (`pyproject.toml`): `calibrate` and `convert` CLI scripts, a GUI entry point and
+  OpenLABEL/SAVANT ontology schemas. Grew out of the SAVANTPostProcessing prototype (from 2025-10).
