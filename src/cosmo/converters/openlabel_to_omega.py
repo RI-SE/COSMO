@@ -29,6 +29,7 @@ import json
 import math
 import os
 import re
+import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -61,6 +62,7 @@ from cosmo.converters.environment import (
     load_weather,
     parse_srt,
     read_flight_record_meta,
+    shift_srt_frames,
 )
 from cosmo.converters.ontology_mapper import OntologyMapper
 
@@ -286,6 +288,7 @@ def load_environment_sources(
     flight_record_sequence: int,
     georef_data_path: Optional[str],
     log: Callable[[str], None],
+    frame_offset: int = 0,
 ) -> EnvironmentSources:
     """Collect the optional time/position/weather sources; the SRT clock takes precedence over the flight record."""
     clock: Optional[FrameClock] = None
@@ -295,7 +298,7 @@ def load_environment_sources(
         fr_start, fr_lat, fr_lon = read_flight_record_meta(flight_record_path, flight_record_sequence)
 
     if srt_path:
-        srt_frames = parse_srt(srt_path)
+        srt_frames = shift_srt_frames(parse_srt(srt_path), frame_offset)
         if len(srt_frames) < 2:
             raise ValueError(f"SRT {srt_path!r} has fewer than two parsable entries")
         clock = clock_from_srt(srt_frames, timezone_name)
@@ -349,6 +352,19 @@ def _resolve_country_code(
         return 0
 
 
+# ORBIT <= 0.8.0 labelled GUI homography exports "unknown" (fixed in ORBIT commit 0015a0f)
+LEGACY_UNKNOWN_METHOD = "unknown"
+
+
+def _is_projective(matrix: Any) -> bool:
+    """True if a 3x3 matrix has perspective terms, which only a homography export can have."""
+    try:
+        m = np.asarray(matrix, dtype=np.float64)
+    except (TypeError, ValueError):
+        return False
+    return m.shape == (3, 3) and bool(np.any(m[2, :2] != 0.0))
+
+
 def load_alignment(
     calibration_path: Optional[str],
     georef_data_path: Optional[str],
@@ -368,7 +384,13 @@ def load_alignment(
 
     if georef:
         tm = (georef.get("transform_method") or "").lower()
-        if tm and tm != "homography":
+        if tm == LEGACY_UNKNOWN_METHOD and _is_projective(georef.get("transformation_matrix")):
+            warnings.warn(
+                f"{georef_data_path}: transform_method 'unknown' (legacy ORBIT export) read as homography, "
+                "since the matrix has perspective terms",
+                stacklevel=2,
+            )
+        elif tm and tm != "homography":
             raise ValueError(
                 f"Unsupported ORBIT georef transform_method='{georef.get('transform_method')}'. "
                 "Expected homography-style pixel->ground transform."
@@ -497,6 +519,26 @@ def make_vehicle_classification(
 # OpenLABEL parsing (SAVANT subset)
 # -----------------------------------------------------------------------------
 
+def _latest_vec_number(vec: Any, name: str) -> Optional[float]:
+    """Newest value of a numeric vec entry, or None when absent (missing means unknown, not 1.0).
+
+    SAVANT writes vec as a list of {name, val} with val newest first; a dict keyed by name is also accepted.
+    """
+    if isinstance(vec, dict):
+        entry = vec.get(name)
+    elif isinstance(vec, list):
+        entry = next((e for e in vec if isinstance(e, dict) and e.get("name") == name), None)
+    else:
+        entry = None
+    val = entry.get("val") if isinstance(entry, dict) else None
+    if isinstance(val, list):
+        val = val[0] if val else None
+    try:
+        return float(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_openlabel(ol: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
     root = ol.get("openlabel", ol)
 
@@ -541,10 +583,7 @@ def parse_openlabel(ol: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Dict
                 if isinstance(val, list) and len(val) >= 5:
                     rbbox = [float(val[0]), float(val[1]), float(val[2]), float(val[3]), float(val[4])]
 
-            conf = 1.0
-            vec = od_data.get("vec", {})
-            if isinstance(vec, dict) and "confidence" in vec and isinstance(vec.get("confidence"), dict):
-                conf = float(vec["confidence"].get("val", 1.0))
+            conf = _latest_vec_number(od_data.get("vec"), "confidence")
 
             if rbbox is not None:
                 objs_out[oid] = {"rbbox": rbbox, "confidence": conf}
@@ -581,6 +620,7 @@ def convert_openlabel_to_omega(
     object_frame: str = "global",
     srt_path: Optional[str] = None,
     timezone_name: str = DEFAULT_TIMEZONE,
+    frame_offset: int = 0,
     flight_record_path: Optional[str] = None,
     flight_record_sequence: int = 0,
 ) -> float:
@@ -678,6 +718,7 @@ def convert_openlabel_to_omega(
     env_sources = load_environment_sources(
         root, 1.0 / dt, srt_path, timezone_name,
         flight_record_path, flight_record_sequence, georef_data_path, _log,
+        frame_offset=frame_offset,
     )
     if srt_path and env_sources.clock is not None:
         dt = env_sources.clock.period_s

@@ -29,7 +29,9 @@ trajectory-explorer  = [{include-group = "gui"}, {include-group = "mcap"}, {incl
 # orbit-georef and opendrive-map are standalone packages living as subdirectories
 # of the ORBIT repo, pinned here to per-lib git tags. Bump the tag to upgrade.
 [tool.uv.sources]
-orbit-georef = { git = "https://github.com/RI-SE/ORBIT.git", subdirectory = "orbit-georef", tag = "orbit-georef-v0.1.2" }
+# TEMPORARY (uncertainty work): follow ORBIT's dev-uncertain branch. Switch back to a new tag
+# (e.g. orbit-georef-v0.2.0) once that work is finalized, committed and merged.
+orbit-georef = { git = "https://github.com/RI-SE/ORBIT.git", subdirectory = "orbit-georef", branch = "dev-uncertain" }
 opendrive-map = { git = "https://github.com/RI-SE/ORBIT.git", subdirectory = "opendrive-map", tag = "opendrive-map-v0.1.0" }
 
 [project.scripts]

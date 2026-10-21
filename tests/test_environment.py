@@ -8,17 +8,20 @@ from pathlib import Path
 import pytest
 
 from cosmo.converters.environment import (
+    FRAME_ALIGNED_NOTE,
     EnvironmentSources,
     FrameClock,
     clock_from_srt,
     environment_fields,
     exposure_to_lux,
     fog_level,
+    frame_offset_from_provenance,
     illumination_level,
     load_weather,
     parse_srt,
     precipitation_level,
     read_flight_record_meta,
+    shift_srt_frames,
     solar_position,
 )
 
@@ -133,3 +136,53 @@ def test_environment_fields_only_set_available_sources():
     assert fields["unix_timestamp"] == int(datetime(2025, 10, 16, 11, 41, 1, tzinfo=timezone.utc).timestamp())
     assert fields["seconds_since_midnight"] == 13 * 3600 + 41 * 60 + 1  # CEST
     assert "sun_elevation" in fields and "ambient_illumination" not in fields
+
+
+def test_shift_srt_frames_maps_annotated_frame_to_later_srt_frame(tmp_path: Path):
+    srt = tmp_path / "v.srt"
+    srt.write_text(SRT_TEXT, encoding="utf-8")
+    frames = parse_srt(str(srt))
+    shifted = shift_srt_frames(frames, 1)
+    # Annotated frame 0 now carries the time of SRT frame 1
+    assert [f.frame_idx for f in shifted] == [-1, 0, 1]
+    assert shifted[1].local_time == frames[1].local_time
+    shifted_clock = clock_from_srt(shifted, "Europe/Stockholm")
+    original_clock = clock_from_srt(frames, "Europe/Stockholm")
+    assert abs((shifted_clock.utc(0) - original_clock.utc(1)).total_seconds()) < 0.002
+
+
+def _write_prov(tmp_path: Path, rectify_log: str | None, nested: bool = False) -> str:
+    activities = {"activity:step_1": {"dataprov:arguments": "/x/vidtools/vidconcat.py --output o",
+                                      "dataprov:outputLog": ""}}
+    if rectify_log is not None:
+        activities["activity:step_2"] = {
+            "dataprov:arguments": "/x/vidtools/vidrectify.py in.mp4 out.mp4",
+            "dataprov:outputLog": rectify_log,
+        }
+    # An orchestrator step that merely mentions vidrectify must not be taken for the tool itself
+    activities["activity:step_3"] = {"dataprov:arguments": "orchestrator --rectify",
+                                     "dataprov:outputLog": "vidrectify"}
+    if nested:
+        chain = {"activity": {}, "bundle": {"bundle:nested_0": {"activity": activities}}}
+    else:
+        chain = {"activity": activities}
+    path = tmp_path / "prov.json"
+    path.write_text(json.dumps(chain), encoding="utf-8")
+    return str(path)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_frame_offset_from_provenance_old_vidrectify_output(tmp_path: Path, nested):
+    log = "Video stabilization completed. Successfully stabilized 10/10 frames (100.0%)."
+    assert frame_offset_from_provenance(_write_prov(tmp_path, log, nested)) == 1
+
+
+def test_frame_offset_from_provenance_frame_aligned_output(tmp_path: Path):
+    log = f"Video stabilization completed. {FRAME_ALIGNED_NOTE}"
+    assert frame_offset_from_provenance(_write_prov(tmp_path, log)) == 0
+
+
+def test_frame_offset_unknown_without_vidrectify_step(tmp_path: Path):
+    assert frame_offset_from_provenance(_write_prov(tmp_path, None)) is None
+    assert frame_offset_from_provenance(None) is None
+    assert frame_offset_from_provenance(str(tmp_path / "missing.json")) is None

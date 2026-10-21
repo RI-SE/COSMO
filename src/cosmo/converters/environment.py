@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -100,6 +100,47 @@ def read_flight_record_meta(path: str, sequence: int = 0) -> Tuple[Optional[date
     lat = osd.get("latitude", {}).get("mean")
     lon = osd.get("longitude", {}).get("mean")
     return start_utc, lat, lon
+
+
+# FieldDataLab vidrectify writes this into its provenance output log once its output is frame-aligned;
+# older vidrectify output dropped the first frame, so annotated frame k was SRT frame k + 1
+FRAME_ALIGNED_NOTE = "Frame-aligned: output frame k is input frame k."
+RECTIFY_TOOL = "vidrectify"
+
+
+def frame_offset_from_provenance(prov_path: Optional[str]) -> Optional[int]:
+    """SRT frame offset of the annotated video from its provenance chain, or None if it can't be told."""
+    if not prov_path:
+        return None
+    try:
+        with open(prov_path, encoding="utf-8") as f:
+            chain = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    logs = [activity.get("dataprov:outputLog", "") for activity in _activities(chain)
+            if RECTIFY_TOOL in activity.get("dataprov:arguments", "").split(" ", 1)[0]]
+    if not logs:
+        return None
+    return 0 if FRAME_ALIGNED_NOTE in logs[-1] else 1
+
+
+def _activities(node: Any):
+    """All provenance activities, including those in nested (inlined) bundles."""
+    if isinstance(node, dict):
+        if "dataprov:arguments" in node:
+            yield node
+        for value in node.values():
+            yield from _activities(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _activities(value)
+
+
+def shift_srt_frames(frames: List[SrtFrame], frame_offset: int) -> List[SrtFrame]:
+    """Re-index SRT frames to annotated-video frames: annotated frame k is SRT frame k + frame_offset."""
+    if frame_offset == 0:
+        return frames
+    return [replace(f, frame_idx=f.frame_idx - frame_offset) for f in frames]
 
 
 @dataclass(frozen=True)

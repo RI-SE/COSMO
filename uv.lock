@@ -533,7 +533,7 @@ requires-dist = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "opendrive-map", git = "https://github.com/RI-SE/ORBIT.git?subdirectory=opendrive-map&tag=opendrive-map-v0.1.0" },
-    { name = "orbit-georef", git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&tag=orbit-georef-v0.1.2" },
+    { name = "orbit-georef", git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&branch=dev-uncertain" },
     { name = "pandas" },
     { name = "pillow" },
     { name = "pycountry" },
@@ -1973,7 +1973,7 @@ dependencies = [
 [[package]]
 name = "orbit-georef"
 version = "0.1.2"
-source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&tag=orbit-georef-v0.1.2#13007cc51bd002c55fd60352d1ad54130fb2fcba" }
+source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&branch=dev-uncertain#0e3bc36faef8b746244694d3be069592a29d8944" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },

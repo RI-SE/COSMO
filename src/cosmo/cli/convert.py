@@ -16,7 +16,7 @@ import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 from cosmo.app.convert_app import ConvertConfig, run_convert
 
@@ -157,6 +157,9 @@ Examples:
     env.add_argument("--srt", metavar="PATH",
                      help="DJI SRT subtitle file of the annotated video (per-frame time, GPS, exposure). "
                           "Drives frame timing and OSI environmental_conditions")
+    env.add_argument("--frame-offset", type=_frame_offset_arg, default=None, metavar="N|auto",
+                     help="Annotated frame k is SRT frame k+N. 'auto' (default) reads it from the --prov-in "
+                          "chain: FieldDataLab vidrectify output before 2026-10-21 dropped the first frame (N=1)")
     env.add_argument("--timezone", default="Europe/Stockholm", metavar="IANA",
                      help="Timezone of the SRT clock and for local time of day (default: Europe/Stockholm)")
 
@@ -175,6 +178,16 @@ Examples:
                            "(will be inlined into output DPR)")
 
     return ap
+
+
+def _frame_offset_arg(value: str) -> Optional[int]:
+    """Parse --frame-offset: 'auto' -> None (detect), otherwise an integer."""
+    if value.lower() == "auto":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer or 'auto', got {value!r}")
 
 
 def _resolve_openlabel(args: argparse.Namespace, ap: argparse.ArgumentParser) -> str:
@@ -299,6 +312,8 @@ def main(argv=None) -> int:
         object_frame=args.object_frame,
         srt=args.srt,
         timezone=args.timezone,
+        frame_offset=args.frame_offset,
+        prov_in=args.prov_in,
     )
 
     def _log(line: str) -> None:

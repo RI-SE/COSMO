@@ -22,5 +22,6 @@ Pedestrian). It is mapped to OSI type, vehicle classification and role; see the 
 traffic, structures, notes) are not exported. Mapping: [environmental conditions](osi-mapping.md#environmental-conditions-groundtruthenvironmental_conditions-mcap-only).
 
 ## Confidence
-COSMO can read confidence from:
-`object_data.vec.confidence.val` (if present).
+COSMO reads the per-box confidence from the `confidence` entry of `object_data.vec`, a list of
+`{"name": ..., "val": [...]}` entries with the newest value first, as SAVANT writes it. It is kept
+for future use and does not affect the output yet. A missing entry means unknown, not 1.0.

@@ -57,6 +57,9 @@ class ConvertConfig:
     # the flight record (above) gives start time and position when no SRT is given
     srt: Optional[str] = None
     timezone: str = "Europe/Stockholm"  # IANA zone of the SRT clock and for local time of day
+    # Annotated frame k is SRT frame k + frame_offset; None = detect from the provenance chain (prov_in)
+    frame_offset: Optional[int] = None
+    prov_in: Optional[str] = None
 
     # size stabilization
     stabilize_size: bool = False
@@ -170,6 +173,24 @@ def _get_converter_or_raise():
 # ------------------------------------------------------------------------------------------
 # Public API
 # ------------------------------------------------------------------------------------------
+def _resolve_frame_offset(cfg: ConvertConfig, log_fn: Optional[LogFn]) -> Tuple[int, str]:
+    """Offset between annotated-video frames and SRT frames: explicit, from provenance, or assumed 0."""
+    from cosmo.converters.environment import frame_offset_from_provenance
+
+    if cfg.frame_offset is not None:
+        return cfg.frame_offset, "explicit"
+    detected = frame_offset_from_provenance(cfg.prov_in)
+    if detected is not None:
+        if detected and log_fn:
+            log_fn(f"[COSMO] Warning: provenance shows pre-2026-10 vidrectify output (first frame dropped); "
+                   f"annotated frame k is SRT frame k+{detected}")
+        return detected, "provenance"
+    if cfg.srt and log_fn:
+        log_fn("[COSMO] Warning: frame alignment with the SRT is unknown (no vidrectify step in --prov-in); "
+               "assuming 0. FieldDataLab output made before 2026-10-21 needs --frame-offset 1")
+    return 0, "assumed"
+
+
 def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertResult:
     """
     Run a conversion under a per-run folder and return structured output paths.
@@ -234,6 +255,8 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         )
         log_fn(f"[COSMO] OpenDRIVE embedded: {'yes' if cfg.opendrive else 'no'}")
 
+    frame_offset, frame_offset_source = _resolve_frame_offset(cfg, log_fn)
+
     # Build oblique corrector if requested
     corrector = None
     if cfg.flight_record and cfg.bbox_correction != "none":
@@ -289,6 +312,7 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         object_frame=cfg.object_frame,
         srt_path=str(Path(cfg.srt).expanduser().resolve()) if cfg.srt else None,
         timezone_name=cfg.timezone,
+        frame_offset=frame_offset,
         flight_record_path=str(Path(cfg.flight_record).expanduser().resolve()) if cfg.flight_record else None,
         flight_record_sequence=cfg.flight_record_sequence,
     )
@@ -317,6 +341,8 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
             "csv_path": csv_path if csv_path and Path(csv_path).is_file() else None,
             "mcap_path": mcap_path if mcap_path and Path(mcap_path).is_file() else None,
             "fps_used": fps_used,
+            "frame_offset_vs_srt": frame_offset,
+            "frame_offset_source": frame_offset_source,
             "alignment_source": ("georef-data" if cfg.georef_data else ("calibration" if cfg.calibration else "none")),
             "applied_xy_offset": list(cfg.xy_offset),
             "applied_yaw_offset_deg": cfg.yaw_offset_deg,
