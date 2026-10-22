@@ -769,6 +769,7 @@ def _estimate_heights(frames, objects_meta, H, corrector, log) -> Dict[str, Tupl
                 (od["rbbox"], angle_wrap(-float(yaw_img) + _h_rotation_angle(H, cx, cy))))
     heights = estimate_heights(corrector, observations)
     log(f"[COSMO] Height estimated for {len(heights)} of {len(observations)} object(s); others use class defaults")
+    log("[COSMO] Warning: --estimate-height is experimental and probably not reliable yet; not for data products")
     return heights
 
 

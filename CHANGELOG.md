@@ -22,7 +22,8 @@ All notable changes to COSMO are documented here. Format follows
 - `--camera-uncertainty` (opt-in): camera height, gimbal pitch and azimuth error in the oblique-correction
   uncertainty (`BboxCorrector.with_camera`; `DroneCamera.stddev` from the flight record).
 - `--estimate-height` (opt-in, experimental): per-object effective vehicle height from the track
-  (`cosmo.corrections.height_estimate`), written as `h_eff`/`h_eff_sigma` in the companion.
+  (`cosmo.corrections.height_estimate`), written as `h_eff`/`h_eff_sigma` in the companion. Probably does not
+  give good results yet (implausibly low heights on real annotations); not for data products.
 
 ### Changed
 - `convert_openlabel_to_omega` computes all samples first, then writes MCAP/CSV (same output as before).
@@ -30,6 +31,14 @@ All notable changes to COSMO are documented here. Format follows
   `--flight-record` the vehicle-height uncertainty is included (positions unchanged).
 
 ### Fixed
+- **Oblique correction placed the camera on the wrong side.** The camera azimuth was `drone_yaw + gimbal_yaw`,
+  but DJI flight records log the gimbal yaw as an absolute heading, so the heading was doubled (off by ~57° at
+  BorasEkas, ~92° at BorasKraklanda, ~180° at GbgSaroRound). The corrector now takes the viewing azimuth from the
+  georeference H (like the camera position) and warns when the flight record differs by more than 20°; the
+  flight-record loader uses the gimbal yaw alone. Affects `cosmo correct` and `cosmo convert --bbox-correction`.
+- **Analytical correction model:** replaced the move of "far" corners along camera rays (which skewed the box and
+  widened cars beside the camera) by removing the roof stretch δ = (P − C)·h/(H_c − h): centre − δ/2, each
+  dimension − |δ| along its axis. The 3d mode starts from this result. Tested against a synthetic pinhole camera.
 - Weather from SAVANT ≥ 2.5 (class-typed tags such as `WeatherRain`) was ignored; both SAVANT weather formats are
   now read by field name. Old-format weather contexts no longer hide tag fields they don't mention.
 - Vehicle roles: Train → PUBLIC_TRANSPORT (was CIVIL); AgriculturalVehicle and EmergencyVehicle → OTHER

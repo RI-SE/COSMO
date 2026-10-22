@@ -229,6 +229,8 @@ def _build_corrector(cfg: ConvertConfig, mode: str, log_fn: Optional[LogFn]):
                 proj_string = json.load(f).get("proj_string")
         corrector = BboxCorrector(cam, H_corr, mode=mode, proj_string=proj_string,
                                   use_gps_cam_pos=cfg.use_gps_cam_pos)
+        if log_fn and corrector.azimuth_warning():
+            log_fn(f"[COSMO] Warning: {corrector.azimuth_warning()}")
         if log_fn:
             log_fn(f"[COSMO] Oblique correction: mode={mode}, "
                    f"height={cam.drone_height:.1f}m, el={cam.elevation_angle_deg:.1f}° from nadir")
@@ -309,6 +311,8 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
     # vehicle-height uncertainty of input already corrected by `cosmo correct`
     corrector = _build_corrector(cfg, cfg.bbox_correction, log_fn) if cfg.bbox_correction != "none" else None
     height_model = _build_corrector(cfg, "analytical", None) if corrector is None else None
+    if log_fn and height_model is not None and height_model.azimuth_warning():
+        log_fn(f"[COSMO] Warning: {height_model.azimuth_warning()}")
 
     # Call converter (pass log_fn through); quality_report is filled with the uncertainty summary
     quality_report: Dict[str, Any] = {}

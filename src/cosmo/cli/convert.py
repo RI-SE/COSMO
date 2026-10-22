@@ -150,8 +150,8 @@ Examples:
                     help="Add camera height, gimbal pitch and azimuth error to the oblique-correction uncertainty "
                          "(needs --flight-record)")
     uq.add_argument("--estimate-height", action="store_true",
-                    help="Estimate each vehicle's effective height from its track instead of the class default "
-                         "(needs --bbox-correction; changes positions and sizes of those objects)")
+                    help="EXPERIMENTAL, probably not reliable yet: estimate each vehicle's effective height from its "
+                         "track instead of the class default (needs --bbox-correction; changes positions and sizes)")
     uq.add_argument("--sensor-data", action="store_true",
                     help="Also write an OSI SensorData topic with existence probability and RMS errors")
 

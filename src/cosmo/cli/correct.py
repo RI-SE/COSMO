@@ -348,6 +348,8 @@ def main(argv=None) -> int:
     )
     corrector = BboxCorrector(cam, H, mode=args.bbox_correction, proj_string=proj_string,
                               use_gps_cam_pos=args.use_gps_cam_pos)
+    if corrector.azimuth_warning():
+        print(f"Warning: {corrector.azimuth_warning()}", flush=True)
 
     # For geo output: add coordinate_systems to root
     root = ol.get("openlabel", ol)

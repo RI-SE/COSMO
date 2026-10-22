@@ -66,8 +66,13 @@ See [outputs: companion OpenLABEL and SensorData](../reference/outputs-omega-pri
 | `--smooth-kinematics` | Kalman/RTS-smoothed position, velocity and acceleration in all outputs instead of raw differences |
 | `--jerk-psd Q` | smoother process noise, white-jerk PSD in m²/s⁵ (default 2.0) |
 | `--camera-uncertainty` | add camera height, gimbal pitch and azimuth error (flight-record stddev combined with assumed sensor error: 1 m, 0.5°, 1°) to the oblique-correction uncertainty |
-| `--estimate-height` | estimate each vehicle's effective height from how its corrected size changes along the track (needs `--bbox-correction`, a moving vehicle and ≥ 20 frames; others keep the class default). Changes positions and sizes of those objects; experimental |
+| `--estimate-height` | **Experimental, not recommended yet.** Estimate each vehicle's effective height from how its corrected size changes along the track (needs `--bbox-correction`, a moving vehicle and ≥ 20 frames; others keep the class default). Changes positions and sizes of those objects. See the warning below |
 | `--sensor-data` | also write an OSI `SensorData` topic (`sensor_data`) with existence probability and RMS errors |
+
+> **Warning: `--estimate-height` probably does not produce good results at the moment.** It recovers the height
+> on synthetic data, but on real annotations (GbgSaroRound 2025-10-16, human-edited boxes) it gave implausibly low
+> heights (median 0.9 m for cars) and did not make sizes more consistent; the other distance-dependent size
+> errors of image-drawn boxes are absorbed into the height. Use it only for experiments, not for data products.
 
 ### Provenance
 | Option | Description |

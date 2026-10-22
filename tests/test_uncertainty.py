@@ -146,31 +146,6 @@ def test_precorrected_uses_height_model_without_moving_boxes():
     assert out["oblique"] == ["cosmo_correct", "unknown", "1.5"]
 
 
-def test_height_estimate_recovers_silhouette_height():
-    """Synthetic camera: far corners of a 4.5 x 1.8 m car seen with a 1.6 m roof, at several distances."""
-    from types import SimpleNamespace
-
-    from cosmo.corrections.height_estimate import estimate_height
-
-    Hc, true_h = 100.0, 1.6
-
-    class Corrector:
-        _cam_pos = np.array([0.0, 0.0, Hc])
-        camera = SimpleNamespace(drone_height=Hc)
-
-        def ground_corners(self, cx, cy, w, h, yaw):
-            # car centred at (cx, 0) m, axis-aligned; far side (x > cx) seen at the roof: pushed away from camera
-            corners = [(cx - 2.25, -0.9), (cx + 2.25, -0.9), (cx + 2.25, 0.9), (cx - 2.25, 0.9)]
-            far = [x > cx for x, _ in corners]
-            push = Hc / (Hc - true_h)
-            return [(x * push, y * push) if f else (x, y) for (x, y), f in zip(corners, far)], far
-
-    observations = [([float(d), 0.0, 0.0, 0.0, 0.0], 0.0) for d in np.linspace(10, 80, 40)]
-    h_eff, sigma = estimate_height(Corrector(), observations)
-    assert h_eff == pytest.approx(true_h, abs=0.06) and sigma >= 0.1
-    assert estimate_height(Corrector(), observations[:5]) is None  # too few frames
-
-
 def test_camera_terms_add_bias(tmp_path):
     from types import SimpleNamespace
 

@@ -1,7 +1,7 @@
 """Effective vehicle height per object from how its corrected size changes along the track (opt-in).
 
-The oblique correction pulls the far (roof-edge) corners towards the camera by (H_c - h)/H_c. With a wrong
-height h the corrected length and width still depend on where the vehicle is relative to the camera; a car
+The oblique correction removes the roof stretch delta = (P - C) h / (H_c - h). With a wrong height h the
+corrected length and width still depend on where the vehicle is relative to the camera; a car
 does not change size, so the h that makes them most constant over the track is the object's effective
 silhouette height. It needs the vehicle to move through a range of distances: other objects keep the class
 default. Untested idea (SAVANT uncertainty.md D4d), hence opt-in.
@@ -9,7 +9,6 @@ default. Untested idea (SAVANT uncertainty.md D4d), hence opt-in.
 
 from __future__ import annotations
 
-import math
 from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
@@ -26,17 +25,10 @@ Observation = Tuple[Sequence[float], float]  # (rbbox [cx, cy, w, h, yaw_img], w
 def size_curves(corrector, rbbox: Sequence[float], heading: float) -> Tuple[np.ndarray, np.ndarray, float]:
     """Corrected (length, width) for every height in HEIGHT_GRID, and the horizontal distance to the camera."""
     cx, cy, w_px, h_px, yaw_img = rbbox
-    corners, far = corrector.ground_corners(cx, cy, w_px, h_px, yaw_img)
-    corners, far = np.array(corners), np.array(far)
-    cam = np.asarray(corrector._cam_pos[:2])
-    scale = (corrector.camera.drone_height - HEIGHT_GRID) / corrector.camera.drone_height  # (G,)
-    moved = cam + (corners[None] - cam) * scale[:, None, None]  # (G, 4, 2)
-    grid = np.where(far[None, :, None], moved, corners[None])
-    c, s = math.cos(-heading), math.sin(-heading)
-    xs = grid[..., 0] * c - grid[..., 1] * s
-    ys = grid[..., 0] * s + grid[..., 1] * c
-    distance = float(np.linalg.norm(corners.mean(axis=0) - cam))
-    return xs.max(axis=1) - xs.min(axis=1), ys.max(axis=1) - ys.min(axis=1), distance
+    centre, length, width, u, v = corrector.measured_footprint(cx, cy, w_px, h_px, yaw_img, heading)
+    delta = corrector.roof_offset(centre, HEIGHT_GRID)  # (G, 2)
+    distance = float(np.linalg.norm(centre - np.asarray(corrector._cam_pos[:2])))
+    return length - np.abs(delta @ u), width - np.abs(delta @ v), distance
 
 
 def _best_height(lengths: np.ndarray, widths: np.ndarray) -> int:

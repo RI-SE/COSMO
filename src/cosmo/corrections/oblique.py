@@ -1,6 +1,7 @@
 """Oblique drone bbox correction: analytical and 3D-fitting paths."""
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from dataclasses import dataclass
@@ -37,6 +38,16 @@ class CorrectionResult:
     width: float
     height: float
     method: str  # "analytical" | "3d"
+
+
+AZIMUTH_WARN_DEG = 20.0
+
+
+def _view_azimuth_deg(H: np.ndarray, u: float, v: float, step: float = 50.0) -> float:
+    """Ground direction of image "up" at (u, v), degrees clockwise from north: where a tilted camera looks."""
+    x0, y0 = _apply_homography(H, u, v)
+    x1, y1 = _apply_homography(H, u, v - step)
+    return float(np.degrees(np.arctan2(x1 - x0, y1 - y0)))
 
 
 def _apply_homography(H: np.ndarray, u: float, v: float) -> tuple[float, float]:
@@ -170,7 +181,6 @@ class BboxCorrector:
 
     def __init__(self, camera: DroneCamera, H: np.ndarray, mode: str = "analytical",
                  proj_string: str | None = None, use_gps_cam_pos: bool = False):
-        self.camera = camera
         self.H = H
         if mode == "3d":
             try:
@@ -183,6 +193,16 @@ class BboxCorrector:
             self.mode = "analytical"
         self._H_inv = np.linalg.inv(H)
         self._nadir_xy = np.array(_apply_homography(H, camera.image_width / 2, camera.image_height / 2))
+        # Viewing azimuth from H (like the camera position below): consistent with the georeference, and
+        # independent of compass/gimbal-yaw errors in the flight record
+        h_azimuth = _view_azimuth_deg(H, camera.image_width / 2, camera.image_height / 2)
+        off = (camera.camera_azimuth_deg - h_azimuth + 180.0) % 360.0 - 180.0
+        # Printed by the CLIs (azimuth_warning()); info here, else Python's last-resort handler prints it twice
+        self.azimuth_mismatch = (camera.camera_azimuth_deg, off, h_azimuth) if abs(off) > AZIMUTH_WARN_DEG else None
+        if self.azimuth_mismatch:
+            log.info(self.azimuth_warning())
+        camera = dataclasses.replace(camera, camera_azimuth_deg=h_azimuth)
+        self.camera = camera
 
         # Camera position: H-derived is geometrically consistent with the calibrated H.
         # GPS (drone body position) can be 10–20m off from the optical centre and introduces bias.
@@ -210,6 +230,14 @@ class BboxCorrector:
                  cam_decomp[0], cam_decomp[1], cam_decomp[2],
                  float(np.linalg.norm(cam_decomp[:2] - h_pos[:2])))
 
+    def azimuth_warning(self) -> str | None:
+        """Message when the flight-record camera azimuth disagrees with the georeference, else None."""
+        if not self.azimuth_mismatch:
+            return None
+        recorded, off, used = self.azimuth_mismatch
+        return (f"flight-record camera azimuth {recorded:.1f}° differs {off:+.1f}° from the georeference "
+                f"({used:.1f}°); using the georeference")
+
     def with_camera(self, **changes) -> "BboxCorrector":
         """Copy with camera parameters changed (e.g. drone_height), for sensitivity analysis.
 
@@ -217,7 +245,6 @@ class BboxCorrector:
         its height changes. The 3x4 projection used by 3d mode is not updated.
         """
         import copy
-        import dataclasses
 
         other = copy.copy(self)
         other.camera = dataclasses.replace(self.camera, **changes)
@@ -243,25 +270,35 @@ class BboxCorrector:
         return analytical
 
     def ground_corners(self, cx: float, cy: float, w_px: float, h_px: float,
-                       yaw_img: float) -> tuple[list[tuple[float, float]], list[bool]]:
-        """The 4 rbbox corners mapped to the ground (z=0) via H, and which are far from the camera.
-
-        For near corners the annotation boundary is the tyre at z=0, so the H-map is correct; far corners
-        (on the opposite side of the car from the camera: negative dot product of corner and camera
-        directions from the centre) have the roof edge as silhouette boundary (z=h_veh).
-        """
+                       yaw_img: float) -> list[tuple[float, float]]:
+        """The 4 rbbox corners mapped to the ground (z=0) via H."""
         cos_a, sin_a = np.cos(yaw_img), np.sin(yaw_img)
         hw, hh = w_px / 2, h_px / 2
         corners_px = [
             (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
             for dx, dy in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh))
         ]
-        corners_world = [_apply_homography(self.H, u, v) for u, v in corners_px]
-        X_raw, Y_raw = _apply_homography(self.H, cx, cy)
-        cam_dx = self._cam_pos[0] - X_raw
-        cam_dy = self._cam_pos[1] - Y_raw
-        far = [(wx - X_raw) * cam_dx + (wy - Y_raw) * cam_dy < 0 for wx, wy in corners_world]
-        return corners_world, far
+        return [_apply_homography(self.H, u, v) for u, v in corners_px]
+
+    def measured_footprint(self, cx: float, cy: float, w_px: float, h_px: float, yaw_img: float,
+                           heading_rad: float) -> tuple[np.ndarray, float, float, np.ndarray, np.ndarray]:
+        """Ground-mapped box: centre, extents along the vehicle axes (length, width) and the axes u, v."""
+        corners = np.array(self.ground_corners(cx, cy, w_px, h_px, yaw_img))
+        u = np.array([np.cos(heading_rad), np.sin(heading_rad)])
+        v = np.array([-u[1], u[0]])
+        along, across = corners @ u, corners @ v
+        return corners.mean(axis=0), float(np.ptp(along)), float(np.ptp(across)), u, v
+
+    def roof_offset(self, centre: np.ndarray, h_veh) -> np.ndarray:
+        """Ground displacement of the roof outline relative to the footprint, delta = (P - C) h / (H_c - h).
+
+        The silhouette maps to the footprint stretched by delta, so the measured centre is P + delta/2;
+        h_veh may be an array (one delta per height). Assumes the roof outline is the footprint raised by h.
+        """
+        cam = self._cam_pos[:2]
+        k = np.asarray(h_veh, dtype=float) / (self.camera.drone_height - np.asarray(h_veh, dtype=float))
+        foot = cam + (centre - cam) / (1.0 + k[..., None] / 2.0)
+        return (foot - cam) * k[..., None]
 
     def _correct_analytical(
         self,
@@ -272,32 +309,16 @@ class BboxCorrector:
         heading_rad: float,
         h_veh_override: float | None = None,
     ) -> CorrectionResult:
+        """Remove the roof stretch: centre - delta/2, each dimension minus |delta| along its axis."""
         h_veh = (h_veh_override if h_veh_override is not None
                  else DEFAULT_VEHICLE_HEIGHTS.get(label_type.lower(), DEFAULT_VEHICLE_HEIGHTS["other"]))
-
-        corners_world, far = self.ground_corners(cx, cy, w_px, h_px, yaw_img)
-        cos_h, sin_h = np.cos(-heading_rad), np.sin(-heading_rad)
-
-        # H-consistent shadow reverse for far corners:
-        # H maps the roofline pixel to the ground "shadow" (extending beyond the footprint).
-        # The true footprint edge is: cam + (shadow - cam) × (H_drone - h_veh) / H_drone
-        roof_scale = (self.camera.drone_height - h_veh) / self.camera.drone_height
-        for i, (wx, wy) in enumerate(corners_world):
-            if far[i]:  # far corner → roof
-                corners_world[i] = (
-                    self._cam_pos[0] + (wx - self._cam_pos[0]) * roof_scale,
-                    self._cam_pos[1] + (wy - self._cam_pos[1]) * roof_scale,
-                )
-
-        X_corr = sum(x for x, y in corners_world) / 4
-        Y_corr = sum(y for x, y in corners_world) / 4
-        veh_xs = [x * cos_h - y * sin_h for x, y in corners_world]
-        veh_ys = [x * sin_h + y * cos_h for x, y in corners_world]
-
+        centre, length, width, u, v = self.measured_footprint(cx, cy, w_px, h_px, yaw_img, heading_rad)
+        delta = self.roof_offset(centre, h_veh)
+        x, y = centre - delta / 2
         return CorrectionResult(
-            x=X_corr, y=Y_corr, z=0.0,
-            length=max(max(veh_xs) - min(veh_xs), _MIN_LENGTH),
-            width=max(max(veh_ys) - min(veh_ys), _MIN_WIDTH),
+            x=float(x), y=float(y), z=0.0,
+            length=max(length - abs(float(delta @ u)), _MIN_LENGTH),
+            width=max(width - abs(float(delta @ v)), _MIN_WIDTH),
             height=h_veh,
             method="analytical",
         )

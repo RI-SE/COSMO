@@ -43,7 +43,8 @@ and as `[su:default_used]` in provenance; a missing value is "unknown", never "e
   objects with the same uids as the OSI ids plus `osi_type`, and per-object `num`: `n_frames`,
   `size_mean_l/w`, `size_std_l/w` (over measured, not interpolated, frames), `path_residual_rms` (scatter
   around the smoothed track), `share_interpolated`, `p_exist_mean`, and with `--estimate-height` `h_eff` and
-  `h_eff_sigma` (m; sigma from the two halves of the track, at least 0.1 m). Tags, contexts, relations, actions,
+  `h_eff_sigma` (m; sigma from the two halves of the track, at least 0.1 m; experimental and probably not
+  reliable yet, see the [CLI warning](../user_guide/cli.md#uncertainty)). Tags, contexts, relations, actions,
   events and streams are copied from the input.
 - Variant B (`--companion-frames`) adds `frames`: per object a world `cuboid` and `vec` entries `velocity`,
   `acceleration`, `position_cov_rel` (`[EE, EN, NE, NN]`, m²), `sigma_heading` (rad), `sigma_size`
