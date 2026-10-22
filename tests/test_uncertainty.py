@@ -120,3 +120,27 @@ def test_sensor_data_topic(tmp_path):
     assert detected.header.ground_truth_id[0].value == 1
     assert detected.header.measurement_state == betterosi.DetectedItemHeaderMeasurementState.MEASURED
     assert detected.base_rmse.position.x > 0
+
+
+def test_precorrected_input_is_recognised():
+    from cosmo.converters.openlabel_to_omega import is_precorrected
+
+    box = {"object_data": {"rbbox": [{"name": "shape", "val": [1, 2, 3, 4, 0]}]}}
+    corrected = {"object_data": {**box["object_data"],
+                                 "cuboid": [{"name": "shape", "val": [0] * 9, "coordinate_system": "world"}]}}
+    assert is_precorrected({"frames": {"0": {"objects": {}}, "1": {"objects": {"1": corrected}}}})
+    assert not is_precorrected({"frames": {"0": {"objects": {"1": box}}}})
+
+
+def test_precorrected_uses_height_model_without_moving_boxes():
+    class Model:  # analytical corrector stand-in: shift grows with the assumed height
+        def _correct_analytical(self, cx, cy, w, h, yaw, label, heading, h_veh):
+            from types import SimpleNamespace
+            return SimpleNamespace(x=0.1 * cx + 0.2 * h_veh, y=0.1 * cy, length=4.0 + 0.1 * h_veh, width=1.8)
+
+    propagation = Propagation(H_SCALE, None, {}, None, Model(), precorrected=True)
+    quality = {"sigma_px": [2.0, 2.0, 1.0, 1.0, 0.05], "origin": "detected", "gap_distance": None, "p_exist": None}
+    out = propagation.sample(_sample(), quality, 0, "car")
+    # height sigma 0.15 * 1.5 m; d(x)/dh = 0.2 -> var 0.045² in x
+    assert out["cov_bias"][0, 0] == pytest.approx((0.2 * 0.225) ** 2)
+    assert out["oblique"] == ["cosmo_correct", "unknown", "1.5"]

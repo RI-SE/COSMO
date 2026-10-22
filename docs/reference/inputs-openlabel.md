@@ -16,10 +16,18 @@ If present under `openlabel.objects`, COSMO uses `type` (an ontology class such 
 Pedestrian). It is mapped to OSI type, vehicle classification and role; see the [object class table](osi-mapping.md#object-classes). Ontology URLs in `openlabel.ontologies` extend the mapping (needs `rdflib`).
 
 ## Optional weather annotation
-`openlabel.contexts[*]` of type `WeatherContext` (per frame interval) and `openlabel.tags[*]` of type
-`WeatherTag` (whole sequence) fill OSI precipitation, fog and cloud cover. Used fields:
-`precipitation`, `precipitation_intensity`, `visibility_km`, `cloud_cover`. Other tags (road, junction,
-traffic, structures, notes) are not exported. Mapping: [environmental conditions](osi-mapping.md#environmental-conditions-groundtruthenvironmental_conditions-mcap-only).
+Weather from SAVANT markit's VLM analysis fills OSI precipitation, fog and cloud cover. Used fields:
+`precipitation`, `precipitation_intensity`, `visibility_km` (newer files: `environmentVisibilityValue`),
+`cloud_cover`. Both SAVANT formats are read, by field name whatever the tag type:
+- before SAVANT 2.5: one `WeatherTag` (whole sequence) and `WeatherContext`s (frame intervals), with explicit
+  `"none"` values;
+- SAVANT ≥ 2.5: one tag per value typed by its scenario-ontology class (`WeatherRain`, `CloudinessOvercast`,
+  `EnvironmentVisibility`, …) and contexts only where it rains or snows. Values without a class (`none`,
+  `unknown`) are not written, so outside those contexts precipitation is left unset (unknown), not "none".
+
+Contexts override tags for their frames. When a field appears in several tags, a person's edit wins, then the
+higher VLM agreement, then the higher confidence. Other tags (road, junction, traffic, structures, notes) are not
+exported to OSI; they are copied to the companion OpenLABEL. Mapping: [environmental conditions](osi-mapping.md#environmental-conditions-groundtruthenvironmental_conditions-mcap-only).
 
 ## Confidence
 COSMO reads the per-box confidence from the `confidence` entry of `object_data.vec`, a list of

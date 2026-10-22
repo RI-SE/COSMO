@@ -205,6 +205,38 @@ def _resolve_frame_offset(cfg: ConvertConfig, log_fn: Optional[LogFn]) -> Tuple[
     return 0, "assumed"
 
 
+def _build_corrector(cfg: ConvertConfig, mode: str, log_fn: Optional[LogFn]):
+    """BboxCorrector for the flight-record camera and the alignment homography, or None."""
+    if not cfg.flight_record:
+        return None
+    try:
+        from cosmo.converters.openlabel_to_omega import load_alignment
+        from cosmo.corrections import BboxCorrector, load_camera_from_flight_record
+        georef_path = str(Path(cfg.georef_data).expanduser().resolve()) if cfg.georef_data else None
+        calib_path = str(Path(cfg.calibration).expanduser().resolve()) if cfg.calibration else None
+        _, H_corr, _ = load_alignment(calib_path, georef_path, cfg.fps)
+        if H_corr is None:
+            if log_fn:
+                log_fn("[COSMO] Oblique correction skipped: no homography available")
+            return None
+        cam = load_camera_from_flight_record(cfg.flight_record, cfg.flight_record_sequence,
+                                             cfg.camera_model, cfg.hfov_deg)
+        proj_string = None
+        if georef_path:
+            with open(georef_path, encoding="utf-8") as f:
+                proj_string = json.load(f).get("proj_string")
+        corrector = BboxCorrector(cam, H_corr, mode=mode, proj_string=proj_string,
+                                  use_gps_cam_pos=cfg.use_gps_cam_pos)
+        if log_fn:
+            log_fn(f"[COSMO] Oblique correction: mode={mode}, "
+                   f"height={cam.drone_height:.1f}m, el={cam.elevation_angle_deg:.1f}° from nadir")
+        return corrector
+    except Exception as exc:
+        if log_fn:
+            log_fn(f"[COSMO] Oblique correction setup failed: {exc}")
+        return None
+
+
 def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertResult:
     """
     Run a conversion under a per-run folder and return structured output paths.
@@ -271,37 +303,10 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
 
     frame_offset, frame_offset_source = _resolve_frame_offset(cfg, log_fn)
 
-    # Build oblique corrector if requested
-    corrector = None
-    if cfg.flight_record and cfg.bbox_correction != "none":
-        try:
-            from cosmo.converters.openlabel_to_omega import load_alignment
-            from cosmo.corrections import BboxCorrector, load_camera_from_flight_record
-            georef_path = str(Path(cfg.georef_data).expanduser().resolve()) if cfg.georef_data else None
-            calib_path = str(Path(cfg.calibration).expanduser().resolve()) if cfg.calibration else None
-            _, H_corr, _ = load_alignment(calib_path, georef_path, cfg.fps)
-            if H_corr is not None:
-                cam = load_camera_from_flight_record(
-                    cfg.flight_record, cfg.flight_record_sequence,
-                    cfg.camera_model, cfg.hfov_deg,
-                )
-                proj_string = None
-                if georef_path:
-                    import json as _json
-                    with open(georef_path, encoding="utf-8") as _f:
-                        proj_string = _json.load(_f).get("proj_string")
-                corrector = BboxCorrector(cam, H_corr, mode=cfg.bbox_correction,
-                                          proj_string=proj_string,
-                                          use_gps_cam_pos=cfg.use_gps_cam_pos)
-                if log_fn:
-                    log_fn(f"[COSMO] Oblique correction: mode={cfg.bbox_correction}, "
-                           f"height={cam.drone_height:.1f}m, el={cam.elevation_angle_deg:.1f}° from nadir")
-            else:
-                if log_fn:
-                    log_fn("[COSMO] Oblique correction skipped: no homography available")
-        except Exception as exc:
-            if log_fn:
-                log_fn(f"[COSMO] Oblique correction setup failed: {exc}")
+    # Oblique corrector if requested; else, with a flight record, an analytical one used only for the
+    # vehicle-height uncertainty of input already corrected by `cosmo correct`
+    corrector = _build_corrector(cfg, cfg.bbox_correction, log_fn) if cfg.bbox_correction != "none" else None
+    height_model = _build_corrector(cfg, "analytical", None) if corrector is None else None
 
     # Call converter (pass log_fn through); quality_report is filled with the uncertainty summary
     quality_report: Dict[str, Any] = {}
@@ -322,6 +327,7 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         strip_xodr_namespace=cfg.strip_xodr_namespace,
         log_fn=log_fn,
         corrector=corrector,
+        height_model=height_model,
         stabilize_size=cfg.stabilize_size,
         country_code=cfg.country_code,
         object_frame=cfg.object_frame,

@@ -232,37 +232,94 @@ def fog_level(visibility_km: float) -> str:
 # OpenLABEL weather
 # -----------------------------------------------------------------------------
 
+# Weather fields COSMO maps to OSI, as named in SAVANT tag/context data. Old markit output (before SAVANT 2.5)
+# has one WeatherTag/WeatherContext with all fields; newer output one tag per value, typed by its scenario
+# ontology class (WeatherRain, CloudinessOvercast, ...), and drops values without a class (none, unknown).
+# Field names are unique across categories, so tags are read by field name whatever their type.
+WEATHER_FIELDS = ("precipitation", "precipitation_intensity", "particulates", "visibility_km", "cloud_cover",
+                  "time_of_day", "sun_position")
+# Newer files store numeric values under the scenario-ontology property name
+_FIELD_ALIASES = {"environmentVisibilityValue": "visibility_km"}
+_OLD_CONTEXT_TYPE = "WeatherContext"
+# Fields that only apply where their parent field has a value (an intensity without precipitation reads as rain)
+_DEPENDENT_FIELDS = {"precipitation_intensity": "precipitation"}
+
+
 def _named_values(data: Dict[str, Any]) -> Dict[str, Any]:
     """Flatten OpenLABEL text/num/boolean entries into {name: val}."""
     return {e["name"]: e.get("val") for kind in ("text", "num", "boolean")
             for e in data.get(kind, []) or [] if "name" in e}
 
 
+def _newest(vec: Dict[str, Any], name: str) -> Any:
+    val = vec.get(name)
+    return (val[0] if val else None) if isinstance(val, list) else val
+
+
+def _weather_values(data: Dict[str, Any]) -> Dict[str, Tuple[Any, Tuple]]:
+    """Weather fields of one tag/context: {field: (value, rank)}; higher rank = better source.
+
+    Rank: a person's edit first (newest annotator not markit_*), then VLM agreement, then confidence.
+    """
+    values = _named_values(data)
+    vec = {e["name"]: e.get("val") for e in data.get("vec", []) or [] if "name" in e}
+    out = {}
+    for name, value in values.items():
+        field = _FIELD_ALIASES.get(name, name)
+        if field not in WEATHER_FIELDS or value is None:
+            continue
+        annotator = _newest(vec, f"{name}_annotator")
+        rank = (annotator is not None and not str(annotator).startswith("markit_"),
+                values.get(f"{name}_agreement") or 0.0, _newest(vec, f"{name}_confidence") or 0.0)
+        out[field] = (value, rank)
+    return out
+
+
+def _best(candidates: List[Dict[str, Tuple[Any, Tuple]]]) -> Dict[str, Any]:
+    """Per field, the value from the best-ranked candidate (first one on ties)."""
+    best: Dict[str, Tuple[Any, Tuple]] = {}
+    for candidate in candidates:
+        for field, (value, rank) in candidate.items():
+            if field not in best or rank > best[field][1]:
+                best[field] = (value, rank)
+    return {field: value for field, (value, _) in best.items()}
+
+
 @dataclass(frozen=True)
 class WeatherAnnotations:
-    """Sequence-level WeatherTag values plus frame-interval WeatherContext values (contexts win)."""
+    """Sequence-level weather from tags plus frame-interval values from contexts (contexts win).
+
+    Fields described by class-typed contexts (newer SAVANT) are unknown outside those contexts: there the
+    VLM saw none of the context's values, or could not tell.
+    """
     global_values: Dict[str, Any]
     intervals: List[Tuple[int, int, Dict[str, Any]]]
+    interval_only: frozenset = frozenset()
 
     def for_frame(self, frame_idx: int) -> Dict[str, Any]:
-        for start, end, values in self.intervals:
+        values = {k: v for k, v in self.global_values.items() if k not in self.interval_only}
+        for start, end, interval_values in self.intervals:
             if start <= frame_idx <= end:
-                return values
-        return self.global_values
+                values.update(interval_values)
+        for field, parent in _DEPENDENT_FIELDS.items():
+            if parent in self.interval_only and field in self.global_values and parent in values:
+                values.setdefault(field, self.global_values[field])
+        return values
 
 
 def load_weather(root: Dict[str, Any]) -> WeatherAnnotations:
-    global_values: Dict[str, Any] = {}
-    for tag in (root.get("tags") or {}).values():
-        if tag.get("type") == "WeatherTag":
-            global_values = _named_values(tag.get("tag_data") or {})
-    intervals = []
+    global_values = _best([_weather_values(tag.get("tag_data") or {}) for tag in (root.get("tags") or {}).values()])
+    intervals, interval_only = [], set()
     for ctx in (root.get("contexts") or {}).values():
-        if ctx.get("type") == "WeatherContext":
-            values = _named_values(ctx.get("context_data") or {})
-            for fi in ctx.get("frame_intervals") or []:
-                intervals.append((int(fi["frame_start"]), int(fi["frame_end"]), values))
-    return WeatherAnnotations(global_values, intervals)
+        values = _best([_weather_values(ctx.get("context_data") or {})])
+        if not values:
+            continue
+        if ctx.get("type") != _OLD_CONTEXT_TYPE:
+            interval_only.update(values)
+        for fi in ctx.get("frame_intervals") or []:
+            intervals.append((int(fi["frame_start"]), int(fi["frame_end"]), values))
+    interval_only.update(field for field, parent in _DEPENDENT_FIELDS.items() if parent in interval_only)
+    return WeatherAnnotations(global_values, intervals, frozenset(interval_only))
 
 
 def precipitation_level(weather: Dict[str, Any]) -> Optional[str]:

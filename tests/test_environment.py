@@ -186,3 +186,39 @@ def test_frame_offset_unknown_without_vidrectify_step(tmp_path: Path):
     assert frame_offset_from_provenance(_write_prov(tmp_path, None)) is None
     assert frame_offset_from_provenance(None) is None
     assert frame_offset_from_provenance(str(tmp_path / "missing.json")) is None
+
+
+def _new_format_root() -> dict:
+    """SAVANT >= 2.5: one tag per value typed by class; contexts only where it rains/snows."""
+    def tag(tag_type, name, val, kind="text", agreement=None, annotator="markit_vlm"):
+        data = {kind: [{"name": name, "val": val}],
+                "vec": [{"name": f"{name}_annotator", "val": [annotator]}, {"name": f"{name}_confidence", "val": [0.9]}]}
+        if agreement is not None:
+            data["num"] = data.get("num", []) + [{"name": f"{name}_agreement", "val": agreement}]
+        return {"type": tag_type, "tag_data": data}
+    return {
+        "tags": {"0": tag("CloudinessOvercast", "cloud_cover", "overcast", agreement=0.6),
+                 "1": tag("EnvironmentVisibility", "environmentVisibilityValue", 8.0, kind="num"),
+                 "2": tag("PrecipitationLight", "precipitation_intensity", "light"),
+                 "3": tag("WeatherRain", "precipitation", "rain"),
+                 # A person changed an older WeatherTag in edit: it wins over the VLM
+                 "4": tag("CloudinessClear", "cloud_cover", "clear", annotator="alice")},
+        "contexts": {"0": {"type": "WeatherRain", "frame_intervals": [{"frame_start": 5, "frame_end": 9}],
+                           "context_data": {"text": [{"name": "precipitation", "val": "rain"}]}}},
+    }
+
+
+def test_new_format_weather_by_field_name():
+    weather = load_weather(_new_format_root())
+    inside, outside = weather.for_frame(7), weather.for_frame(0)
+    assert inside["precipitation"] == "rain" and inside["precipitation_intensity"] == "light"
+    # Outside the rain context precipitation is unknown (none or not determinable), not the whole-video vote
+    assert "precipitation" not in outside and "precipitation_intensity" not in outside
+    assert outside["visibility_km"] == 8.0 and outside["cloud_cover"] == "clear"
+    assert environment_fields(7, EnvironmentSources(weather=weather)) == {
+        "precipitation": "LIGHT", "fog": "MODERATE_VISIBILITY", "cloud_cover": "ZERO_OKTAS"}
+
+
+def test_old_context_keeps_tag_values_it_does_not_mention():
+    weather = load_weather(_weather_root())
+    assert weather.for_frame(7)["cloud_cover"] == "overcast"

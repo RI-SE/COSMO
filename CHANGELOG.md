@@ -22,6 +22,12 @@ All notable changes to COSMO are documented here. Format follows
 
 ### Changed
 - `convert_openlabel_to_omega` computes all samples first, then writes MCAP/CSV (same output as before).
+- Input corrected by `cosmo correct` is recognised: the companion records `cosmo_correct`, and with
+  `--flight-record` the vehicle-height uncertainty is included (positions unchanged).
+
+### Fixed
+- Weather from SAVANT ≥ 2.5 (class-typed tags such as `WeatherRain`) was ignored; both SAVANT weather formats are
+  now read by field name. Old-format weather contexts no longer hide tag fields they don't mention.
 - Vehicle roles: Train → PUBLIC_TRANSPORT (was CIVIL); AgriculturalVehicle and EmergencyVehicle → OTHER
   (was CIVIL), since OSI has no agricultural or generic emergency role.
 - Documentation restructured: README covers inputs, install and usage; mapping tables moved to

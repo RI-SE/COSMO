@@ -107,10 +107,12 @@ class Propagation:
     """Uncertainty of each converted sample, from the georef quality, a video sidecar and box sigma."""
 
     def __init__(self, H: np.ndarray, georef_path: Optional[str], post: Dict[str, Any],
-                 video_quality: Optional[Dict[str, Any]], corrector=None):
+                 video_quality: Optional[Dict[str, Any]], corrector=None, precorrected: bool = False):
+        """corrector: the oblique correction applied (or, for precorrected input, a model of it)."""
         self.transformer = self._transformer(H, georef_path)
         self.T = post_transform_matrix(**post)
         self.corrector = corrector
+        self.precorrected = precorrected
         georef = position_covariance(self.transformer) if self.transformer.__class__ is not _Homography else None
         self.georef = georef or {"image": None, "datum": None, "basis": {"image": "unknown", "datum": "unknown"},
                                  "source": {"image": "none", "datum": "none"}}
@@ -157,7 +159,9 @@ class Propagation:
             cov_px, cov_bias, size_h, oblique = self._oblique_terms(s, label_type, sigma)
         else:
             cov_px = J @ np.diag([sigma[0] ** 2, sigma[1] ** 2]) @ J.T
-            cov_bias, size_h, oblique = np.zeros((2, 2)), (0.0, 0.0), ["none", "0", f"{s['h_veh']:g}"]
+            cov_bias, size_h = np.zeros((2, 2)), (0.0, 0.0)
+            oblique = ["cosmo_correct" if self.precorrected else "none", "unknown" if self.precorrected else "0",
+                       f"{s['h_veh']:g}"]
         cov_noise = cov_px + self.frame_cov(frame_no, J)
         if self.cov_image is not None:
             cov_bias = cov_bias + self.cov_image
@@ -193,8 +197,9 @@ class Propagation:
         cov_px = Jc @ np.diag([sigma[0] ** 2, sigma[1] ** 2]) @ Jc.T
         cov_h = np.outer(g, g) * sigma_h ** 2
         size_h = np.abs((lw_h - base_lw) / HEIGHT_STEP) * sigma_h
-        raw = np.array(self._raw_xy(cx, cy))
-        shift = float(np.linalg.norm(base_xy - raw))
+        if self.precorrected:  # the box is already corrected: its raw position is not known here
+            return cov_px, cov_h, (float(size_h[0]), float(size_h[1])), ["cosmo_correct", "unknown", f"{h:g}"]
+        shift = float(np.linalg.norm(base_xy - np.array(self._raw_xy(cx, cy))))
         method = s["oblique"].method if s.get("oblique") is not None else "analytical"
         return cov_px, cov_h, (float(size_h[0]), float(size_h[1])), [method, f"{shift:.3f}", f"{h:g}"]
 

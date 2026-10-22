@@ -636,12 +636,15 @@ def convert_openlabel_to_omega(
     jerk_psd: float = DEFAULT_JERK_PSD,
     sensor_data: bool = False,
     quality_report: Optional[Dict[str, Any]] = None,
+    height_model=None,
 ) -> float:
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP; returns the fps used.
 
     The first parameters match the former script version. Uncertainty (scenario-uncertainty SPEC P5) is
     computed when a companion file, SensorData, smoothing or a quality_report (filled in place) is asked for.
+    height_model (an analytical BboxCorrector) gives the vehicle-height uncertainty of input that `cosmo correct`
+    already corrected; it does not change any position.
     """
     log = _logger(log_fn)
     ol = load_json(openlabel_path)
@@ -687,7 +690,9 @@ def convert_openlabel_to_omega(
     propagation = None
     if H is not None and (companion_path or sensor_data or smooth_kinematics or quality_report is not None):
         video_quality = _read_video_quality(video_quality_path, log)
-        propagation = Propagation(H, georef_data_path, geometry.post, video_quality, corrector)
+        precorrected = corrector is None and is_precorrected(root)
+        propagation = Propagation(H, georef_data_path, geometry.post, video_quality,
+                                  corrector or (height_model if precorrected else None), precorrected=precorrected)
 
     timeline = _build_timeline(sorted_frames, frames, objects_meta, geometry, _Classifier(mapper),
                                obj_name_to_idx, dt, propagation)
@@ -714,7 +719,7 @@ def convert_openlabel_to_omega(
         settings = {"frame_offset_applied": frame_offset,
                     "kinematics": {"method": "rts_constant_acceleration" if smooth_kinematics else "finite_difference",
                                    "jerk_psd": jerk_psd if smooth_kinematics else None},
-                    "oblique_correction": getattr(corrector, "mode", None) if corrector is not None else "none"}
+                    "oblique_correction": _oblique_label(corrector, propagation)}
         run = companion_doc.run_quality(
             propagation.run_quality(), timeline,
             _quality_inputs(openlabel_path, georef_data_path, video_quality_path), settings)
@@ -737,6 +742,28 @@ def convert_openlabel_to_omega(
         f"{'[CSV ' + out_prefix + '.csv] ' if write_csv else ''}"
     )
     return 1.0 / dt
+
+
+def is_precorrected(root: Dict[str, Any]) -> bool:
+    """True for OpenLABEL written by `cosmo correct` (world cuboids or its size_deviation entries)."""
+    for frame in (root.get("frames") or {}).values():
+        objects = (frame.get("objects") or {}).values()
+        for od in objects:
+            data = od.get("object_data") or {}
+            if any(c.get("coordinate_system") == "world" for c in data.get("cuboid") or [] if isinstance(c, dict)):
+                return True
+            if any(str(e.get("name", "")).startswith("size_deviation") for e in data.get("vec") or []
+                   if isinstance(e, dict)):
+                return True
+        if objects:  # cosmo correct marks every box; the first frame with boxes decides
+            return False
+    return False
+
+
+def _oblique_label(corrector, propagation: Propagation) -> str:
+    if corrector is not None:
+        return getattr(corrector, "mode", "analytical")
+    return "cosmo_correct" if propagation.precorrected else "none"
 
 
 def _build_timeline(sorted_frames, frames, objects_meta, geometry: "_Geometry", classifier: "_Classifier",
