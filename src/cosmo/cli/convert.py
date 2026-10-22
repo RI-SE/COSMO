@@ -146,6 +146,12 @@ Examples:
                     help="Kalman/RTS-smoothed position, velocity and acceleration instead of raw differences")
     uq.add_argument("--jerk-psd", type=float, default=DEFAULT_JERK_PSD, metavar="Q",
                     help=f"Smoother process noise: white-jerk PSD in m²/s⁵ (default {DEFAULT_JERK_PSD})")
+    uq.add_argument("--camera-uncertainty", action="store_true",
+                    help="Add camera height, gimbal pitch and azimuth error to the oblique-correction uncertainty "
+                         "(needs --flight-record)")
+    uq.add_argument("--estimate-height", action="store_true",
+                    help="Estimate each vehicle's effective height from its track instead of the class default "
+                         "(needs --bbox-correction; changes positions and sizes of those objects)")
     uq.add_argument("--sensor-data", action="store_true",
                     help="Also write an OSI SensorData topic with existence probability and RMS errors")
 
@@ -352,6 +358,8 @@ def main(argv=None) -> int:
         smooth_kinematics=args.smooth_kinematics,
         jerk_psd=args.jerk_psd,
         sensor_data=args.sensor_data,
+        camera_uncertainty=args.camera_uncertainty,
+        estimate_height=args.estimate_height,
     )
 
     def _log(line: str) -> None:

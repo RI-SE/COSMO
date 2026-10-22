@@ -19,6 +19,10 @@ All notable changes to COSMO are documented here. Format follows
 - `--smooth-kinematics` (Kalman/RTS, constant acceleration, `--jerk-psd`): smoothed position, v and a with σ.
   Off by default; raw finite differences are unchanged.
 - `--sensor-data`: OSI SensorData topic with existence probability, measurement state and RMS errors.
+- `--camera-uncertainty` (opt-in): camera height, gimbal pitch and azimuth error in the oblique-correction
+  uncertainty (`BboxCorrector.with_camera`; `DroneCamera.stddev` from the flight record).
+- `--estimate-height` (opt-in, experimental): per-object effective vehicle height from the track
+  (`cosmo.corrections.height_estimate`), written as `h_eff`/`h_eff_sigma` in the companion.
 
 ### Changed
 - `convert_openlabel_to_omega` computes all samples first, then writes MCAP/CSV (same output as before).

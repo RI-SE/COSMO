@@ -222,3 +222,15 @@ def test_new_format_weather_by_field_name():
 def test_old_context_keeps_tag_values_it_does_not_mention():
     weather = load_weather(_weather_root())
     assert weather.for_frame(7)["cloud_cover"] == "overcast"
+
+
+def test_new_format_explicit_no_precipitation():
+    root = {"contexts": {
+        "0": {"type": "WeatherNoPrecipitation", "frame_intervals": [{"frame_start": 0, "frame_end": 4}],
+              "context_data": {"text": [{"name": "precipitation", "val": "none"}]}},
+        "1": {"type": "WeatherRain", "frame_intervals": [{"frame_start": 5, "frame_end": 9}],
+              "context_data": {"text": [{"name": "precipitation", "val": "rain"}]}}}}
+    weather = load_weather(root)
+    assert environment_fields(2, EnvironmentSources(weather=weather)) == {"precipitation": "NONE"}
+    assert environment_fields(7, EnvironmentSources(weather=weather)) == {"precipitation": "UNKNOWN"}
+    assert environment_fields(20, EnvironmentSources(weather=weather)) == {}

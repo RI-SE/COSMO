@@ -75,6 +75,8 @@ class ConvertConfig:
     smooth_kinematics: bool = False
     jerk_psd: float = DEFAULT_JERK_PSD
     sensor_data: bool = False
+    camera_uncertainty: bool = False  # camera height/pitch/azimuth error in the oblique terms
+    estimate_height: bool = False  # per-object effective height from the track (needs bbox_correction)
 
     # ISO 3166-1 numeric country code; auto-derived from georef lat/lon if None
     country_code: Optional[int] = None
@@ -343,6 +345,8 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         jerk_psd=cfg.jerk_psd,
         sensor_data=cfg.sensor_data,
         quality_report=quality_report,
+        camera_uncertainty=cfg.camera_uncertainty,
+        estimate_height=cfg.estimate_height,
     )
 
     # determine produced outputs

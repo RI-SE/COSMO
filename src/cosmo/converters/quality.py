@@ -43,6 +43,10 @@ MEASURED_ORIGINS = ("detected", "merged", "manual", "reviewed")
 # Finite-difference steps for the oblique correction (px, m)
 PIXEL_STEP = 0.5
 HEIGHT_STEP = 0.1
+# Camera parameters of the oblique correction: (DroneCamera field, step, assumed systematic sigma). The
+# flight-record stddev (drift over the sequence) is combined in quadrature with the assumed sensor error:
+# barometric height above the take-off point vs the ground under the camera, gimbal and compass bias.
+CAMERA_PARAMETERS = (("drone_height", 0.5, 1.0), ("gimbal_pitch_deg", 0.2, 0.5), ("camera_azimuth_deg", 0.5, 1.0))
 
 
 def box_quality(vec: Any) -> Dict[str, Any]:
@@ -107,19 +111,26 @@ class Propagation:
     """Uncertainty of each converted sample, from the georef quality, a video sidecar and box sigma."""
 
     def __init__(self, H: np.ndarray, georef_path: Optional[str], post: Dict[str, Any],
-                 video_quality: Optional[Dict[str, Any]], corrector=None, precorrected: bool = False):
-        """corrector: the oblique correction applied (or, for precorrected input, a model of it)."""
+                 video_quality: Optional[Dict[str, Any]], corrector=None, precorrected: bool = False,
+                 camera_uncertainty: bool = False, heights: Optional[Dict[str, Tuple[float, float]]] = None):
+        """corrector: the oblique correction applied (or, for precorrected input, a model of it).
+
+        camera_uncertainty adds the camera height/pitch/azimuth terms; heights gives per-object
+        (h_eff, sigma) estimates that replace the class-default height prior.
+        """
+        self.defaults_used: set = set()
         self.transformer = self._transformer(H, georef_path)
         self.T = post_transform_matrix(**post)
         self.corrector = corrector
         self.precorrected = precorrected
+        self.heights = heights or {}
+        self.camera_models = self._camera_models(corrector) if camera_uncertainty and corrector is not None else []
         georef = position_covariance(self.transformer) if self.transformer.__class__ is not _Homography else None
         self.georef = georef or {"image": None, "datum": None, "basis": {"image": "unknown", "datum": "unknown"},
                                  "source": {"image": "none", "datum": "none"}}
         self.cov_image = self._rotated(self.georef["image"])
         self.cov_datum = self._rotated(self.georef["datum"])
         self.stabilization = (video_quality or {}).get("stabilization") or {}
-        self.defaults_used: set = set()
         if self.cov_image is None:
             self.defaults_used.add("georef")
 
@@ -182,26 +193,47 @@ class Propagation:
         cx, cy, w_px, h_px, yaw_img = s["rbbox"]
         heading, h = s["heading_world"], s["h_veh"]
 
-        def corrected(dcx=0.0, dcy=0.0, dh=0.0):
-            r = self.corrector._correct_analytical(cx + dcx, cy + dcy, w_px, h_px, yaw_img, label_type, heading,
-                                                   h + dh)
+        def corrected(dcx=0.0, dcy=0.0, dh=0.0, corrector=self.corrector):
+            r = corrector._correct_analytical(cx + dcx, cy + dcy, w_px, h_px, yaw_img, label_type, heading, h + dh)
             return np.array([r.x, r.y]), np.array([r.length, r.width])
         base_xy, base_lw = corrected()
         d_cx = (corrected(dcx=PIXEL_STEP)[0] - base_xy) / PIXEL_STEP
         d_cy = (corrected(dcy=PIXEL_STEP)[0] - base_xy) / PIXEL_STEP
         xy_h, lw_h = corrected(dh=HEIGHT_STEP)
-        sigma_h = HEIGHT_REL_SIGMA * h
-        self.defaults_used.add("vehicle_height")
+        sigma_h = self._height_sigma(s["oid"], h)
         Jc = self.T @ np.column_stack([d_cx, d_cy])
         g = self.T @ ((xy_h - base_xy) / HEIGHT_STEP)
         cov_px = Jc @ np.diag([sigma[0] ** 2, sigma[1] ** 2]) @ Jc.T
         cov_h = np.outer(g, g) * sigma_h ** 2
-        size_h = np.abs((lw_h - base_lw) / HEIGHT_STEP) * sigma_h
+        size_var = ((lw_h - base_lw) / HEIGHT_STEP * sigma_h) ** 2
+        for model, step, sigma_p in self.camera_models:  # shared by all objects: bias, not noise
+            xy_p, lw_p = corrected(corrector=model)
+            g = self.T @ ((xy_p - base_xy) / step)
+            cov_h = cov_h + np.outer(g, g) * sigma_p ** 2
+            size_var = size_var + ((lw_p - base_lw) / step * sigma_p) ** 2
+        size_h = np.sqrt(size_var)
         if self.precorrected:  # the box is already corrected: its raw position is not known here
             return cov_px, cov_h, (float(size_h[0]), float(size_h[1])), ["cosmo_correct", "unknown", f"{h:g}"]
         shift = float(np.linalg.norm(base_xy - np.array(self._raw_xy(cx, cy))))
         method = s["oblique"].method if s.get("oblique") is not None else "analytical"
         return cov_px, cov_h, (float(size_h[0]), float(size_h[1])), [method, f"{shift:.3f}", f"{h:g}"]
+
+    def _height_sigma(self, oid: str, h: float) -> float:
+        """Sigma of the vehicle height: the per-object estimate if there is one, else the class prior."""
+        if oid in self.heights:
+            return self.heights[oid][1]
+        self.defaults_used.add("vehicle_height")
+        return HEIGHT_REL_SIGMA * h
+
+    def _camera_models(self, corrector) -> List[Tuple[Any, float, float]]:
+        """(perturbed corrector, step, sigma) per camera parameter."""
+        stddev = getattr(corrector.camera, "stddev", None) or {}
+        self.defaults_used.add("camera")
+        models = []
+        for name, step, assumed in CAMERA_PARAMETERS:
+            sigma = math.hypot(stddev.get(name) or 0.0, assumed)
+            models.append((corrector.with_camera(**{name: getattr(corrector.camera, name) + step}), step, sigma))
+        return models
 
     def _raw_xy(self, cx: float, cy: float) -> Tuple[float, float]:
         H = self.transformer.transform_matrix

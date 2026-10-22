@@ -21,7 +21,7 @@ H_SCALE = np.array([[0.1, 0, 0], [0, 0.1, 0], [0, 0, 1.0]])  # 0.1 m per px
 
 
 def _sample(cx=100.0, cy=100.0, w=40.0, h=10.0):
-    return {"rbbox": [cx, cy, w, h, 0.0], "h_veh": 1.5, "heading_world": 0.0, "yaw": 0.0}
+    return {"oid": "1", "rbbox": [cx, cy, w, h, 0.0], "h_veh": 1.5, "heading_world": 0.0, "yaw": 0.0}
 
 
 def test_box_quality_reads_entries_and_infers_legacy_origin():
@@ -144,3 +144,51 @@ def test_precorrected_uses_height_model_without_moving_boxes():
     # height sigma 0.15 * 1.5 m; d(x)/dh = 0.2 -> var 0.045² in x
     assert out["cov_bias"][0, 0] == pytest.approx((0.2 * 0.225) ** 2)
     assert out["oblique"] == ["cosmo_correct", "unknown", "1.5"]
+
+
+def test_height_estimate_recovers_silhouette_height():
+    """Synthetic camera: far corners of a 4.5 x 1.8 m car seen with a 1.6 m roof, at several distances."""
+    from types import SimpleNamespace
+
+    from cosmo.corrections.height_estimate import estimate_height
+
+    Hc, true_h = 100.0, 1.6
+
+    class Corrector:
+        _cam_pos = np.array([0.0, 0.0, Hc])
+        camera = SimpleNamespace(drone_height=Hc)
+
+        def ground_corners(self, cx, cy, w, h, yaw):
+            # car centred at (cx, 0) m, axis-aligned; far side (x > cx) seen at the roof: pushed away from camera
+            corners = [(cx - 2.25, -0.9), (cx + 2.25, -0.9), (cx + 2.25, 0.9), (cx - 2.25, 0.9)]
+            far = [x > cx for x, _ in corners]
+            push = Hc / (Hc - true_h)
+            return [(x * push, y * push) if f else (x, y) for (x, y), f in zip(corners, far)], far
+
+    observations = [([float(d), 0.0, 0.0, 0.0, 0.0], 0.0) for d in np.linspace(10, 80, 40)]
+    h_eff, sigma = estimate_height(Corrector(), observations)
+    assert h_eff == pytest.approx(true_h, abs=0.06) and sigma >= 0.1
+    assert estimate_height(Corrector(), observations[:5]) is None  # too few frames
+
+
+def test_camera_terms_add_bias(tmp_path):
+    from types import SimpleNamespace
+
+    class Model:
+        def __init__(self, height=100.0):
+            self.camera = SimpleNamespace(drone_height=height, gimbal_pitch_deg=-60.0, camera_azimuth_deg=0.0,
+                                          stddev={"drone_height": 0.0})
+
+        def with_camera(self, **changes):
+            return Model(changes.get("drone_height", self.camera.drone_height))
+
+        def _correct_analytical(self, cx, cy, w, h, yaw, label, heading, h_veh):
+            return SimpleNamespace(x=0.1 * cx + 0.01 * self.camera.drone_height, y=0.1 * cy, length=4.0, width=1.8)
+
+    quality = {"sigma_px": [2.0, 2.0, 1.0, 1.0, 0.05], "origin": "detected", "gap_distance": None, "p_exist": None}
+    plain = Propagation(H_SCALE, None, {}, None, Model()).sample(_sample(), quality, 0, "car")
+    with_camera = Propagation(H_SCALE, None, {}, None, Model(), camera_uncertainty=True)
+    out = with_camera.sample(_sample(), quality, 0, "car")
+    # dx/dH = 0.01 with sigma 1.0 m (assumed): + 1e-4 m² in x
+    assert out["cov_bias"][0, 0] - plain["cov_bias"][0, 0] == pytest.approx(1e-4)
+    assert "camera" in with_camera.run_quality()["defaults_used"]

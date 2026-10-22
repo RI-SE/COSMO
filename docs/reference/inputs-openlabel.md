@@ -22,8 +22,9 @@ Weather from SAVANT markit's VLM analysis fills OSI precipitation, fog and cloud
 - before SAVANT 2.5: one `WeatherTag` (whole sequence) and `WeatherContext`s (frame intervals), with explicit
   `"none"` values;
 - SAVANT ≥ 2.5: one tag per value typed by its scenario-ontology class (`WeatherRain`, `CloudinessOvercast`,
-  `EnvironmentVisibility`, …) and contexts only where it rains or snows. Values without a class (`none`,
-  `unknown`) are not written, so outside those contexts precipitation is left unset (unknown), not "none".
+  `EnvironmentVisibility`, …), and precipitation contexts per frame interval. Values without a class (`unknown`)
+  are not written, so frames outside every precipitation context are left unset (unknown). Dry intervals are
+  `WeatherNoPrecipitation` from scenario ontology 2.1.0 on; files made with 2.0.0 have no dry contexts at all.
 
 Contexts override tags for their frames. When a field appears in several tags, a person's edit wins, then the
 higher VLM agreement, then the higher confidence. Other tags (road, junction, traffic, structures, notes) are not

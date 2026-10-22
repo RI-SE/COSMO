@@ -210,6 +210,24 @@ class BboxCorrector:
                  cam_decomp[0], cam_decomp[1], cam_decomp[2],
                  float(np.linalg.norm(cam_decomp[:2] - h_pos[:2])))
 
+    def with_camera(self, **changes) -> "BboxCorrector":
+        """Copy with camera parameters changed (e.g. drone_height), for sensitivity analysis.
+
+        The camera position follows the change: recomputed from H when it was H-derived, else (GPS) only
+        its height changes. The 3x4 projection used by 3d mode is not updated.
+        """
+        import copy
+        import dataclasses
+
+        other = copy.copy(self)
+        other.camera = dataclasses.replace(self.camera, **changes)
+        h_pos = self.camera.camera_world_pos(self._nadir_xy)
+        if np.allclose(self._cam_pos, h_pos):
+            other._cam_pos = other.camera.camera_world_pos(self._nadir_xy)
+        else:
+            other._cam_pos = np.array([self._cam_pos[0], self._cam_pos[1], other.camera.drone_height])
+        return other
+
     def correct(
         self,
         cx: float, cy: float,
@@ -224,6 +242,27 @@ class BboxCorrector:
             return self._correct_3d(cx, cy, w_px, h_px, yaw_img, label_type, heading_rad, analytical, h_veh_override)
         return analytical
 
+    def ground_corners(self, cx: float, cy: float, w_px: float, h_px: float,
+                       yaw_img: float) -> tuple[list[tuple[float, float]], list[bool]]:
+        """The 4 rbbox corners mapped to the ground (z=0) via H, and which are far from the camera.
+
+        For near corners the annotation boundary is the tyre at z=0, so the H-map is correct; far corners
+        (on the opposite side of the car from the camera: negative dot product of corner and camera
+        directions from the centre) have the roof edge as silhouette boundary (z=h_veh).
+        """
+        cos_a, sin_a = np.cos(yaw_img), np.sin(yaw_img)
+        hw, hh = w_px / 2, h_px / 2
+        corners_px = [
+            (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
+            for dx, dy in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh))
+        ]
+        corners_world = [_apply_homography(self.H, u, v) for u, v in corners_px]
+        X_raw, Y_raw = _apply_homography(self.H, cx, cy)
+        cam_dx = self._cam_pos[0] - X_raw
+        cam_dy = self._cam_pos[1] - Y_raw
+        far = [(wx - X_raw) * cam_dx + (wy - Y_raw) * cam_dy < 0 for wx, wy in corners_world]
+        return corners_world, far
+
     def _correct_analytical(
         self,
         cx: float, cy: float,
@@ -236,31 +275,15 @@ class BboxCorrector:
         h_veh = (h_veh_override if h_veh_override is not None
                  else DEFAULT_VEHICLE_HEIGHTS.get(label_type.lower(), DEFAULT_VEHICLE_HEIGHTS["other"]))
 
-        # Map all 4 rbbox corners to ground (z=0) via H.
-        # For the near-side corners this is correct: the annotation boundary is the tyre at z=0.
-        cos_a, sin_a = np.cos(yaw_img), np.sin(yaw_img)
-        hw, hh = w_px / 2, h_px / 2
-        corners_px = [
-            (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
-            for dx, dy in ((-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh))
-        ]
-        corners_world = [_apply_homography(self.H, u, v) for u, v in corners_px]
-        X_raw, Y_raw = _apply_homography(self.H, cx, cy)
-
-        # For each corner, check whether it is on the opposite side of the car from the camera.
-        # A negative dot product means corner and camera point in opposite directions from center → far corner.
-        # Far corners have the roof edge as the silhouette boundary (z=h_veh); near corners
-        # have the tyre (z=0), for which the H-map is already correct.
+        corners_world, far = self.ground_corners(cx, cy, w_px, h_px, yaw_img)
         cos_h, sin_h = np.cos(-heading_rad), np.sin(-heading_rad)
-        cam_dx = self._cam_pos[0] - X_raw
-        cam_dy = self._cam_pos[1] - Y_raw
 
         # H-consistent shadow reverse for far corners:
         # H maps the roofline pixel to the ground "shadow" (extending beyond the footprint).
         # The true footprint edge is: cam + (shadow - cam) × (H_drone - h_veh) / H_drone
         roof_scale = (self.camera.drone_height - h_veh) / self.camera.drone_height
-        for i, ((u, v), (wx, wy)) in enumerate(zip(corners_px, corners_world)):
-            if (wx - X_raw) * cam_dx + (wy - Y_raw) * cam_dy < 0:  # far corner → roof
+        for i, (wx, wy) in enumerate(corners_world):
+            if far[i]:  # far corner → roof
                 corners_world[i] = (
                     self._cam_pos[0] + (wx - self._cam_pos[0]) * roof_scale,
                     self._cam_pos[1] + (wy - self._cam_pos[1]) * roof_scale,

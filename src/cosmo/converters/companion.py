@@ -43,7 +43,7 @@ def _cov_list(cov: Optional[np.ndarray]) -> Optional[List[float]]:
     return None if cov is None else [round(float(v), 6) for v in np.asarray(cov).ravel()]
 
 
-def object_stats(timeline: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def object_stats(timeline: List[Dict[str, Any]], heights: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
     """Per-object quality (SPEC P5): size mean/std over measured frames, path residual RMS, shares."""
     rows: Dict[str, List[Dict[str, Any]]] = {}
     for frame in timeline:
@@ -64,13 +64,15 @@ def object_stats(timeline: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
             "path_residual_rms": float(math.sqrt(np.mean(np.square(residuals)))) if residuals else None,
             "share_interpolated": sum(s.get("origin") in SYNTHESIZED_ORIGINS for s in samples) / len(samples),
             "p_exist_mean": float(np.mean(p_exist)) if p_exist else None,
+            "h_eff": (heights or {}).get(oid, (None, None))[0],
+            "h_eff_sigma": (heights or {}).get(oid, (None, None))[1],
         }
     return stats
 
 
 def _object_num(stats: Dict[str, Any]) -> List[Dict[str, Any]]:
     keys = ("n_frames", "size_mean_l", "size_mean_w", "size_std_l", "size_std_w", "path_residual_rms",
-            "share_interpolated", "p_exist_mean")
+            "share_interpolated", "p_exist_mean", "h_eff", "h_eff_sigma")
     return [{"name": k, "val": round(stats[k], 4) if isinstance(stats[k], float) else stats[k]}
             for k in keys if stats.get(k) is not None]
 
@@ -152,7 +154,8 @@ def run_quality(propagation_run: Dict[str, Any], timeline: List[Dict[str, Any]],
 
 
 def build(root_in: Dict[str, Any], timeline: List[Dict[str, Any]], quality: Dict[str, Any],
-          proj_string: Optional[str], frames: bool, tool: str) -> Dict[str, Any]:
+          proj_string: Optional[str], frames: bool, tool: str,
+          heights: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The companion document; quality = run_quality(...)."""
     osi = {s["oid"]: s for f in timeline for s in f["samples"]}
     metadata = {"schema_version": "1.1", "annotator": tool, "quality": quality}
@@ -161,7 +164,7 @@ def build(root_in: Dict[str, Any], timeline: List[Dict[str, Any]], quality: Dict
     cs = {"type": "geo", "parent": ""}
     if proj_string:
         cs["proj_string"] = proj_string
-    stats = object_stats(timeline)
+    stats = object_stats(timeline, heights)
     out: Dict[str, Any] = {"metadata": metadata, "coordinate_systems": {WORLD_CS: cs},
                            "objects": _objects(root_in, stats, osi)}
     for key in COPIED_SECTIONS:

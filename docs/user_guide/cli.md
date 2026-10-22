@@ -65,6 +65,8 @@ See [outputs: companion OpenLABEL and SensorData](../reference/outputs-omega-pri
 | `--companion-frames` | companion with per-frame world cuboids, covariance and σ (variant B; about 3× the CSV size) |
 | `--smooth-kinematics` | Kalman/RTS-smoothed position, velocity and acceleration in all outputs instead of raw differences |
 | `--jerk-psd Q` | smoother process noise, white-jerk PSD in m²/s⁵ (default 2.0) |
+| `--camera-uncertainty` | add camera height, gimbal pitch and azimuth error (flight-record stddev combined with assumed sensor error: 1 m, 0.5°, 1°) to the oblique-correction uncertainty |
+| `--estimate-height` | estimate each vehicle's effective height from how its corrected size changes along the track (needs `--bbox-correction`, a moving vehicle and ≥ 20 frames; others keep the class default). Changes positions and sizes of those objects; experimental |
 | `--sensor-data` | also write an OSI `SensorData` topic (`sensor_data`) with existence probability and RMS errors |
 
 ### Provenance

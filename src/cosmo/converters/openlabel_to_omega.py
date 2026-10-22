@@ -637,6 +637,8 @@ def convert_openlabel_to_omega(
     sensor_data: bool = False,
     quality_report: Optional[Dict[str, Any]] = None,
     height_model=None,
+    camera_uncertainty: bool = False,
+    estimate_height: bool = False,
 ) -> float:
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP; returns the fps used.
@@ -644,7 +646,9 @@ def convert_openlabel_to_omega(
     The first parameters match the former script version. Uncertainty (scenario-uncertainty SPEC P5) is
     computed when a companion file, SensorData, smoothing or a quality_report (filled in place) is asked for.
     height_model (an analytical BboxCorrector) gives the vehicle-height uncertainty of input that `cosmo correct`
-    already corrected; it does not change any position.
+    already corrected; it does not change any position. Opt-in: camera_uncertainty adds camera height, pitch
+    and azimuth error to the oblique terms; estimate_height replaces the class-default height of objects whose
+    track determines it (needs corrector; changes their position and size).
     """
     log = _logger(log_fn)
     ol = load_json(openlabel_path)
@@ -663,8 +667,9 @@ def convert_openlabel_to_omega(
     if write_mcap and betterosi is None:
         log('[COSMO] MCAP requested but betterosi is not installed; will write CSV only.')
 
+    heights = _estimate_heights(frames, objects_meta, H, corrector, log) if estimate_height else {}
     geometry = _Geometry(
-        H=H, corrector=corrector, defaults=defaults, towed_by=build_towed_by(root, objects_meta),
+        H=H, corrector=corrector, defaults=defaults, towed_by=build_towed_by(root, objects_meta), heights=heights,
         post=dict(swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y, yaw_offset_rad=yaw_offset_rad,
                   xy_offset=xy_offset),
         frame_off=_object_frame_offset(object_frame, odr_path, log),
@@ -692,7 +697,8 @@ def convert_openlabel_to_omega(
         video_quality = _read_video_quality(video_quality_path, log)
         precorrected = corrector is None and is_precorrected(root)
         propagation = Propagation(H, georef_data_path, geometry.post, video_quality,
-                                  corrector or (height_model if precorrected else None), precorrected=precorrected)
+                                  corrector or (height_model if precorrected else None), precorrected=precorrected,
+                                  camera_uncertainty=camera_uncertainty, heights=heights)
 
     timeline = _build_timeline(sorted_frames, frames, objects_meta, geometry, _Classifier(mapper),
                                obj_name_to_idx, dt, propagation)
@@ -716,7 +722,8 @@ def convert_openlabel_to_omega(
             sensor_data=sensor_data and propagation is not None,
         )
     if propagation is not None:
-        settings = {"frame_offset_applied": frame_offset,
+        settings = {"frame_offset_applied": frame_offset, "camera_uncertainty": camera_uncertainty,
+                    "height_estimate": {"objects": len(heights)} if estimate_height else None,
                     "kinematics": {"method": "rts_constant_acceleration" if smooth_kinematics else "finite_difference",
                                    "jerk_psd": jerk_psd if smooth_kinematics else None},
                     "oblique_correction": _oblique_label(corrector, propagation)}
@@ -726,11 +733,11 @@ def convert_openlabel_to_omega(
         if companion_path:
             proj_string, _, _ = _read_georef_geo(georef_data_path)
             companion_doc.write(companion_path, companion_doc.build(
-                root, timeline, run, proj_string, companion_frames, f"COSMO {_cosmo_version()}"))
+                root, timeline, run, proj_string, companion_frames, f"COSMO {_cosmo_version()}", heights))
             log(f"[COSMO] Companion OpenLABEL: {companion_path} ({'with' if companion_frames else 'without'} frames)")
         if quality_report is not None:
             quality_report.update({"run": run, "companion_path": companion_path,
-                                   "objects": companion_doc.object_stats(timeline)})
+                                   "objects": companion_doc.object_stats(timeline, heights)})
     elif companion_path or sensor_data or smooth_kinematics:
         log("[COSMO] Warning: no homography; uncertainty, companion file, SensorData and smoothing skipped")
     if write_csv:
@@ -742,6 +749,27 @@ def convert_openlabel_to_omega(
         f"{'[CSV ' + out_prefix + '.csv] ' if write_csv else ''}"
     )
     return 1.0 / dt
+
+
+def _estimate_heights(frames, objects_meta, H, corrector, log) -> Dict[str, Tuple[float, float]]:
+    """Per-object effective height from the raw boxes (SAVANT origins other than synthesized ones)."""
+    if corrector is None or H is None:
+        log("[COSMO] Warning: height estimation needs --bbox-correction (analytical or 3d); skipped")
+        return {}
+    from cosmo.converters.quality import SYNTHESIZED_ORIGINS
+    from cosmo.corrections.height_estimate import estimate_heights
+
+    observations: Dict[str, List[Tuple[Any, float]]] = {}
+    for frame_id, _ in _sorted_frames(frames):
+        for oid, od in frames[frame_id]["objects"].items():
+            if od["quality"]["origin"] in SYNTHESIZED_ORIGINS:
+                continue
+            cx, cy, _, _, yaw_img = od["rbbox"]
+            observations.setdefault(oid, []).append(
+                (od["rbbox"], angle_wrap(-float(yaw_img) + _h_rotation_angle(H, cx, cy))))
+    heights = estimate_heights(corrector, observations)
+    log(f"[COSMO] Height estimated for {len(heights)} of {len(observations)} object(s); others use class defaults")
+    return heights
 
 
 def is_precorrected(root: Dict[str, Any]) -> bool:
@@ -893,16 +921,18 @@ def _frame_number(seq_idx: int, frame_key: Tuple[int, str]) -> int:
 class _Geometry:
     """Pixel box -> world position, heading and size, shared by every sample of one conversion."""
 
-    def __init__(self, H, corrector, defaults, towed_by, post, frame_off):
+    def __init__(self, H, corrector, defaults, towed_by, post, frame_off, heights=None):
         self.H, self.corrector, self.defaults, self.towed_by = H, corrector, defaults, towed_by
         self.post, self.frame_off = post, frame_off
+        self.heights = heights or {}  # oid -> (estimated height, sigma)
 
     def world(self, oid: str, label_type: str, od: Dict[str, Any]) -> Dict[str, Any]:
         """World state of one box (heading in the world frame before the yaw offset)."""
         cx, cy, w_px, h_px, yaw_img = od["rbbox"]
         H = self.H
         heading_world = angle_wrap(-float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0))
-        h_veh = _resolve_height(label_type, oid, self.towed_by, self.defaults)
+        h_veh = self.heights[oid][0] if oid in self.heights else _resolve_height(label_type, oid, self.towed_by,
+                                                                                 self.defaults)
         oblique = None
         if self.corrector is not None:
             oblique = self.corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)

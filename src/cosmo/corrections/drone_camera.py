@@ -25,6 +25,8 @@ class DroneCamera:
     hfov_deg: float
     drone_lat: float | None = None
     drone_lon: float | None = None
+    # Flight-record standard deviations over the sequence: drone_height (m), gimbal_pitch_deg, camera_azimuth_deg
+    stddev: dict | None = None
 
     @property
     def K(self) -> np.ndarray:
@@ -104,7 +106,16 @@ def load_camera_from_flight_record(
         drone_lat = None
         drone_lon = None
 
+    def _stddev(*keys):
+        try:
+            values = [float(stats[group][name]["stddev"]) for group, name in keys]
+        except (KeyError, TypeError, ValueError):
+            return None
+        return sum(v * v for v in values) ** 0.5
+
     cam = DroneCamera(
+        stddev={"drone_height": _stddev(("osd", "height_agl")), "gimbal_pitch_deg": _stddev(("gimbal", "pitch")),
+                "camera_azimuth_deg": _stddev(("osd", "yaw"), ("gimbal", "yaw"))},
         drone_height=drone_height,
         gimbal_pitch_deg=gimbal_pitch,
         camera_azimuth_deg=camera_azimuth,
