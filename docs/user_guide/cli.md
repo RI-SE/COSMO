@@ -55,6 +55,18 @@ cosmo convert INPUT.json [options]          # or --input / --openlabel INPUT.jso
 | `--use-gps-cam-pos` | use the drone GPS position as camera position instead of the homography-derived one |
 | `--stabilize-size` | use per-object mean dimensions instead of per-frame ones |
 
+### Uncertainty
+See [outputs: companion OpenLABEL and SensorData](../reference/outputs-omega-prime.md#uncertainty-companion-openlabel-and-sensordata).
+
+| Option | Description |
+|---|---|
+| `--video-quality PATH` | FieldDataLab `<video>.quality.json` of the annotated video: per-frame stabilisation error |
+| `--no-companion` | do not write `<prefix>.companion.json` (written by default when a homography is known) |
+| `--companion-frames` | companion with per-frame world cuboids, covariance and σ (variant B; about 3× the CSV size) |
+| `--smooth-kinematics` | Kalman/RTS-smoothed position, velocity and acceleration in all outputs instead of raw differences |
+| `--jerk-psd Q` | smoother process noise, white-jerk PSD in m²/s⁵ (default 2.0) |
+| `--sensor-data` | also write an OSI `SensorData` topic (`sensor_data`) with existence probability and RMS errors |
+
 ### Provenance
 | Option | Description |
 |---|---|

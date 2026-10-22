@@ -19,7 +19,10 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from cosmo.converters.companion import COMPANION_SUFFIX
+from cosmo.converters.kinematics import DEFAULT_JERK_PSD
 
 LogFn = Callable[[str], None]
 
@@ -64,6 +67,15 @@ class ConvertConfig:
     # size stabilization
     stabilize_size: bool = False
 
+    # uncertainty (scenario-uncertainty `world` profile): FieldDataLab video sidecar, companion OpenLABEL
+    # (<prefix>.companion.json; with per-frame data when companion_frames), smoothed kinematics, SensorData
+    video_quality: Optional[str] = None
+    companion: bool = True
+    companion_frames: bool = False
+    smooth_kinematics: bool = False
+    jerk_psd: float = DEFAULT_JERK_PSD
+    sensor_data: bool = False
+
     # ISO 3166-1 numeric country code; auto-derived from georef lat/lon if None
     country_code: Optional[int] = None
 
@@ -86,6 +98,8 @@ class ConvertResult:
     mcap_path: Optional[str]
     fps_used: Optional[float]
     notes: List[str]
+    companion_path: Optional[str] = None
+    quality: Optional[Dict[str, Any]] = None
 
 
 # ------------------------------------------------------------------------------------------
@@ -289,7 +303,8 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
             if log_fn:
                 log_fn(f"[COSMO] Oblique correction setup failed: {exc}")
 
-    # Call converter (pass log_fn through)
+    # Call converter (pass log_fn through); quality_report is filled with the uncertainty summary
+    quality_report: Dict[str, Any] = {}
     fps_used = converter_fn(
         openlabel_path=str(openlabel_path),
         odr_path=str(Path(cfg.opendrive).expanduser().resolve()) if cfg.opendrive else None,
@@ -315,6 +330,13 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         frame_offset=frame_offset,
         flight_record_path=str(Path(cfg.flight_record).expanduser().resolve()) if cfg.flight_record else None,
         flight_record_sequence=cfg.flight_record_sequence,
+        video_quality_path=str(Path(cfg.video_quality).expanduser().resolve()) if cfg.video_quality else None,
+        companion_path=str(out_prefix) + COMPANION_SUFFIX if cfg.companion else None,
+        companion_frames=cfg.companion_frames,
+        smooth_kinematics=cfg.smooth_kinematics,
+        jerk_psd=cfg.jerk_psd,
+        sensor_data=cfg.sensor_data,
+        quality_report=quality_report,
     )
 
     # determine produced outputs
@@ -366,4 +388,32 @@ def run_convert(cfg: ConvertConfig, log_fn: Optional[LogFn] = None) -> ConvertRe
         mcap_path=mcap_path_out,
         fps_used=fps_used,
         notes=notes,
+        companion_path=quality_report.get("companion_path"),
+        quality=quality_report.get("run"),
     )
+
+
+def quality_properties(run_quality: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """dataprov custom properties (su namespace) of a conversion's uncertainty summary."""
+    if not run_quality:
+        return {}
+    from scenario_uncertainty.provenance import custom_properties
+
+    return custom_properties({key: run_quality[key] for key in ("datum", "image", "share_interpolated",
+                                                                "share_reviewed") if run_quality.get(key)})
+
+
+def quality_warnings(run_quality: Optional[Dict[str, Any]]) -> List[str]:
+    """[su:*] warning lines of a conversion."""
+    if not run_quality:
+        return []
+    from scenario_uncertainty.provenance import WarningCode, warning_line
+
+    lines = []
+    if run_quality.get("defaults_used"):
+        lines.append(warning_line(WarningCode.DEFAULT_USED,
+                                  f"defaults used: {', '.join(run_quality['defaults_used'])}"))
+    if run_quality.get("oblique_correction") == "none":
+        lines.append(warning_line("oblique_uncorrected",
+                                  "no oblique correction: sizes inflated, centres biased away from the camera"))
+    return lines

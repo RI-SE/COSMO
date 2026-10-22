@@ -477,6 +477,7 @@ dependencies = [
     { name = "pillow" },
     { name = "pycountry" },
     { name = "reverse-geocoder" },
+    { name = "scenario-uncertainty" },
 ]
 
 [package.dev-dependencies]
@@ -538,6 +539,7 @@ requires-dist = [
     { name = "pillow" },
     { name = "pycountry" },
     { name = "reverse-geocoder" },
+    { name = "scenario-uncertainty", git = "https://github.com/das-rise/scenario-uncertainty.git" },
 ]
 
 [package.metadata.requires-dev]
@@ -1973,7 +1975,7 @@ dependencies = [
 [[package]]
 name = "orbit-georef"
 version = "0.1.2"
-source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&branch=dev-uncertain#0e3bc36faef8b746244694d3be069592a29d8944" }
+source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&branch=dev-uncertain#114c47620d754a75af88ac7eab6cdbbef4916e64" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -3190,6 +3192,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4f/18/fb703603ab108e5c165f52f5b86ee2aa9be43bb781703ec87c66a5f5d604/ruff-0.9.10-py3-none-win_amd64.whl", hash = "sha256:f2160eeef3031bf4b17df74e307d4c5fb689a6f3a26a2de3f7ef4044e3c484f1", size = 11366360, upload-time = "2025-03-07T15:27:38.66Z" },
     { url = "https://files.pythonhosted.org/packages/35/85/338e603dc68e7d9994d5d84f24adbf69bae760ba5efd3e20f5ff2cec18da/ruff-0.9.10-py3-none-win_arm64.whl", hash = "sha256:5fd804c0327a5e5ea26615550e706942f348b197d5475ff34c19733aee4b2e69", size = 10436892, upload-time = "2025-03-07T15:27:41.687Z" },
 ]
+
+[[package]]
+name = "scenario-uncertainty"
+version = "0.1.0"
+source = { git = "https://github.com/das-rise/scenario-uncertainty.git#2f9589052139942443ca229668222f879585a3e7" }
 
 [[package]]
 name = "scipy"

@@ -9,7 +9,19 @@ All notable changes to COSMO are documented here. Format follows
 
 ## [0.6.1] – unreleased
 
+### Added
+- Uncertainty of the converted objects (scenario-uncertainty `world` profile): box σ, origin and `p_exist`
+  from SAVANT, georef image/datum error from orbit-georef, per-frame stabilisation error from
+  `--video-quality`; SPEC defaults when missing (listed, and warned in provenance).
+- Companion OpenLABEL `<prefix>.companion.json`, written by default: run and object quality, tags/contexts;
+  `--companion-frames` adds per-frame world cuboids with `position_cov_rel` and σ. Listed in provenance with
+  `su` properties and `[su:*]` warnings.
+- `--smooth-kinematics` (Kalman/RTS, constant acceleration, `--jerk-psd`): smoothed position, v and a with σ.
+  Off by default; raw finite differences are unchanged.
+- `--sensor-data`: OSI SensorData topic with existence probability, measurement state and RMS errors.
+
 ### Changed
+- `convert_openlabel_to_omega` computes all samples first, then writes MCAP/CSV (same output as before).
 - Vehicle roles: Train → PUBLIC_TRANSPORT (was CIVIL); AgriculturalVehicle and EmergencyVehicle → OTHER
   (was CIVIL), since OSI has no agricultural or generic emergency role.
 - Documentation restructured: README covers inputs, install and usage; mapping tables moved to

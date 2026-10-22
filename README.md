@@ -93,6 +93,10 @@ cosmo convert An_VIDa_<ts>_D.json \
 - `--flight-record`: start time/position without SRT; needed for `--bbox-correction`.
 - `--output-prefix`: write `<prefix>.csv/.mcap` directly instead of a run folder.
 - `--prov-out` with `--srt-prov` (and `--georef-prov`, `--opendrive-prov`, `--flight-record-prov`): provenance record.
+- Uncertainty: `<prefix>.companion.json` (OpenLABEL with run- and object-level quality) is written by default;
+  `--companion-frames` adds per-frame covariance, `--video-quality` uses FieldDataLab's stabilisation sidecar,
+  `--smooth-kinematics` smooths v and a, `--sensor-data` adds an OSI SensorData topic. See
+  [outputs](docs/reference/outputs-omega-prime.md#uncertainty-companion-openlabel-and-sensordata).
 
 ### Other tools
 - `cosmo correct`: corrects bboxes from an oblique (tilted) drone camera and writes a corrected OpenLABEL.

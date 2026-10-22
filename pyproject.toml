@@ -8,7 +8,7 @@ version = "0.6.1"
 description = "COSMO conversion tools (OpenLABEL -> OSI/MCAP + Omega-Prime CSV) with GUI"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy", "pandas", "pillow", "matplotlib", "dataprov", "reverse_geocoder", "pycountry", "orbit-georef", "opendrive-map"]
+dependencies = ["numpy", "pandas", "pillow", "matplotlib", "dataprov", "reverse_geocoder", "pycountry", "orbit-georef", "opendrive-map", "scenario-uncertainty"]
 
 
 [dependency-groups]
@@ -33,6 +33,8 @@ trajectory-explorer  = [{include-group = "gui"}, {include-group = "mcap"}, {incl
 # (e.g. orbit-georef-v0.2.0) once that work is finalized, committed and merged.
 orbit-georef = { git = "https://github.com/RI-SE/ORBIT.git", subdirectory = "orbit-georef", branch = "dev-uncertain" }
 opendrive-map = { git = "https://github.com/RI-SE/ORBIT.git", subdirectory = "opendrive-map", tag = "opendrive-map-v0.1.0" }
+# Follows scenario-uncertainty main; pin a tag once the library is released
+scenario-uncertainty = { git = "https://github.com/das-rise/scenario-uncertainty.git" }
 
 [project.scripts]
 cosmo = "cosmo.cli.main:main"

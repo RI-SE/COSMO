@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from cosmo.app.convert_app import ConvertConfig, run_convert
+from cosmo.converters.kinematics import DEFAULT_JERK_PSD
 
 
 def _existing_file(p: str) -> str:
@@ -133,6 +134,21 @@ Examples:
                         "H-derived is geometrically consistent with the calibrated homography."
                     ))
 
+    # Uncertainty (scenario-uncertainty `world` profile)
+    uq = ap.add_argument_group("uncertainty")
+    uq.add_argument("--video-quality", metavar="PATH", type=_existing_file,
+                    help="FieldDataLab <video>.quality.json of the annotated video (per-frame stabilisation error)")
+    uq.add_argument("--no-companion", dest="companion", action="store_false",
+                    help="Do not write the companion OpenLABEL <prefix>.companion.json")
+    uq.add_argument("--companion-frames", action="store_true",
+                    help="Companion with per-frame world cuboids, position covariance and sigma (variant B)")
+    uq.add_argument("--smooth-kinematics", action="store_true",
+                    help="Kalman/RTS-smoothed position, velocity and acceleration instead of raw differences")
+    uq.add_argument("--jerk-psd", type=float, default=DEFAULT_JERK_PSD, metavar="Q",
+                    help=f"Smoother process noise: white-jerk PSD in m²/s⁵ (default {DEFAULT_JERK_PSD})")
+    uq.add_argument("--sensor-data", action="store_true",
+                    help="Also write an OSI SensorData topic with existence probability and RMS errors")
+
     # Size stabilization
     ap.add_argument("--stabilize-size", action="store_true",
                     help="Use per-object average dimensions instead of per-frame dimensions.")
@@ -219,15 +235,25 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
         tool_version = "unknown"
 
     from dataprov import ProvenanceChain
+    from scenario_uncertainty.provenance import (
+        declare_namespace,
+        join_warnings,
+        namespaces,
+        output_format,
+    )
+
+    from cosmo.app.convert_app import quality_properties, quality_warnings
 
     prov_in = args.prov_in
     if prov_in and Path(prov_in).exists():
         chain = ProvenanceChain.load(prov_in)
+        declare_namespace(chain)
     else:
         chain = ProvenanceChain.create(
             entity_id=f"convert:{Path(openlabel).stem}",
             initial_source=openlabel,
             description=f"Conversion of {Path(openlabel).name} to Omega-Prime",
+            custom_namespaces=namespaces(),
         )
 
     inputs = [openlabel]
@@ -242,6 +268,7 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
         (args.calibration, "json", None),
         (args.flight_record, "json", args.flight_record_prov if args.flight_record_prov and Path(args.flight_record_prov).exists() else None),
         (args.srt, "srt", args.srt_prov if args.srt_prov and Path(args.srt_prov).exists() else None),
+        (args.video_quality, output_format("video", 1), None),
     ]:
         if path:
             inputs.append(path)
@@ -256,6 +283,9 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
     if result.mcap_path:
         outputs.append(str(result.mcap_path))
         output_formats.append("mcap")
+    if result.companion_path:
+        outputs.append(str(result.companion_path))
+        output_formats.append(output_format("world", 1))
 
     has_secondary_prov = any(p is not None for p in input_prov_files[1:])
 
@@ -273,6 +303,8 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
         input_provenance_files=input_prov_files if (prov_in or has_secondary_prov) else None,
         capture_agent=True,
         capture_environment=True,
+        warnings=join_warnings(quality_warnings(result.quality)),
+        custom_properties=quality_properties(result.quality) or None,
     )
     chain.save(args.prov_out, input_prov="inline" if has_secondary_prov else "reference")
     print(f"Provenance: {args.prov_out}")
@@ -314,6 +346,12 @@ def main(argv=None) -> int:
         timezone=args.timezone,
         frame_offset=args.frame_offset,
         prov_in=args.prov_in,
+        video_quality=args.video_quality,
+        companion=args.companion,
+        companion_frames=args.companion_frames,
+        smooth_kinematics=args.smooth_kinematics,
+        jerk_psd=args.jerk_psd,
+        sensor_data=args.sensor_data,
     )
 
     def _log(line: str) -> None:
