@@ -24,6 +24,14 @@ DEFAULT_VEHICLE_HEIGHTS: dict[str, float] = {
     "other": 1.5,
 }
 
+# Height of the silhouette edge the correction removes, where it differs from the vehicle height: a car's roof is
+# narrower than its body, so seen obliquely the far outline is the shoulder, not the roof. Measured 2026-10-22 on
+# human-edited GbgSaroRound boxes (3d mode: 1.5 m → cars 1.61 m wide, 1.2 m → 1.75 m, 0.9 m → 1.89 m; real ≈ 1.8 m).
+# Output heights stay the vehicle heights above.
+SILHOUETTE_HEIGHTS: dict[str, float] = {
+    "car": 1.15,
+}
+
 # Minimum plausible ground-plane dimensions
 _MIN_LENGTH = 0.5
 _MIN_WIDTH = 0.3
@@ -41,12 +49,15 @@ class CorrectionResult:
     # 3d mode: final loss of the fit (px², weighted centre + size mismatch); also set when the fit did not
     # converge and the analytical result was kept (method "analytical")
     fit_residual: float | None = None
+    # Silhouette height the correction used, if it differs from `height` (see SILHOUETTE_HEIGHTS)
+    correction_height: float | None = None
 
     def oblique_entry(self, raw_xy: tuple[float, float]) -> list[str]:
-        """OpenLABEL vec value [method, shift_m, h_used, fit_residual] (strings; SPEC P5)."""
+        """OpenLABEL vec value [method, shift_m, h_used, fit_residual] (strings; SPEC P5); h_used = correction height."""
         shift = float(np.hypot(self.x - raw_xy[0], self.y - raw_xy[1]))
         residual = "" if self.fit_residual is None else f"{self.fit_residual:.3g}"
-        return [self.method, f"{shift:.3f}", f"{self.height:g}", residual]
+        used = self.height if self.correction_height is None else self.correction_height
+        return [self.method, f"{shift:.3f}", f"{used:g}", residual]
 
 
 AZIMUTH_WARN_DEG = 20.0
@@ -272,11 +283,26 @@ class BboxCorrector:
         label_type: str,
         heading_rad: float,
         h_veh_override: float | None = None,
+        effective_height: bool = False,
     ) -> CorrectionResult:
-        analytical = self._correct_analytical(cx, cy, w_px, h_px, yaw_img, label_type, heading_rad, h_veh_override)
+        """Corrected footprint; `height` of the result is the vehicle height, the correction uses the silhouette
+        height (correction_height()) unless effective_height says h_veh_override already is one.
+        """
+        h_veh = (h_veh_override if h_veh_override is not None
+                 else DEFAULT_VEHICLE_HEIGHTS.get(label_type.lower(), DEFAULT_VEHICLE_HEIGHTS["other"]))
+        h_corr = h_veh if effective_height else self.correction_height(label_type, h_veh)
+        result = self._correct_analytical(cx, cy, w_px, h_px, yaw_img, label_type, heading_rad, h_corr)
         if self.mode == "3d":
-            return self._correct_3d(cx, cy, w_px, h_px, yaw_img, label_type, heading_rad, analytical, h_veh_override)
-        return analytical
+            result = self._correct_3d(cx, cy, w_px, h_px, yaw_img, label_type, heading_rad, result, h_corr)
+        result.height = h_veh
+        if h_corr != h_veh:
+            result.correction_height = h_corr
+        return result
+
+    @staticmethod
+    def correction_height(label_type: str, h_veh: float) -> float:
+        """Silhouette height used by the correction: SILHOUETTE_HEIGHTS for classes there, else the vehicle height."""
+        return SILHOUETTE_HEIGHTS.get(str(label_type).lower(), h_veh)
 
     def ground_corners(self, cx: float, cy: float, w_px: float, h_px: float,
                        yaw_img: float) -> list[tuple[float, float]]:

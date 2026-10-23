@@ -936,7 +936,8 @@ class _Geometry:
                                                                                  self.defaults)
         oblique = None
         if self.corrector is not None:
-            oblique = self.corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)
+            oblique = self.corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh,
+                                             effective_height=oid in self.heights)
             X, Y = post_transform_xy(oblique.x, oblique.y, **self.post)
             Z = oblique.z
             length, width, height = oblique.length, oblique.width, oblique.height

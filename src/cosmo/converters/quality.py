@@ -194,7 +194,9 @@ class Propagation:
         (pixel cov 2x2, height cov 2x2, size sigma from the height (L, W), [method, shift_m, h_used]).
         """
         cx, cy, w_px, h_px, yaw_img = s["rbbox"]
-        heading, h = s["heading_world"], s["h_veh"]
+        heading = s["heading_world"]
+        # The correction works with the silhouette height (estimated heights already are one)
+        h = s["h_veh"] if s["oid"] in self.heights else self.corrector.correction_height(label_type, s["h_veh"])
 
         def corrected(dcx=0.0, dcy=0.0, dh=0.0, corrector=self.corrector):
             r = corrector._correct_analytical(cx + dcx, cy + dcy, w_px, h_px, yaw_img, label_type, heading, h + dh)

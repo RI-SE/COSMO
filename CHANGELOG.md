@@ -38,6 +38,10 @@ All notable changes to COSMO are documented here. Format follows
   BorasEkas, ~92° at BorasKraklanda, ~180° at GbgSaroRound). The corrector now takes the viewing azimuth from the
   georeference H (like the camera position) and warns when the flight record differs by more than 20°; the
   flight-record loader uses the gimbal yaw alone. Affects `cosmo correct` and `cosmo convert --bbox-correction`.
+- **Cars are corrected with a silhouette height of 1.15 m** (`SILHOUETTE_HEIGHTS`), not the 1.5 m vehicle height:
+  a car's roof is narrower than its body, so the far outline seen obliquely is the shoulder. On human-edited
+  GbgSaroRound boxes (3d mode) cars were 1.61 m wide with 1.5 m, ≈ 1.8 m with the silhouette height. The output
+  height stays 1.5 m; the `oblique` entry records the height used. Other classes are unchanged.
 - **Analytical correction model:** replaced the move of "far" corners along camera rays (which skewed the box and
   widened cars beside the camera) by removing the roof stretch δ = (P − C)·h/(H_c − h): centre − δ/2, each
   dimension − |δ| along its axis. The 3d mode starts from this result. Tested against a synthetic pinhole camera.

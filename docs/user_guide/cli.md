@@ -49,7 +49,7 @@ cosmo convert INPUT.json [options]          # or --input / --openlabel INPUT.jso
 ### Inline bbox correction
 | Option | Description |
 |---|---|
-| `--bbox-correction {none,analytical,3d}` | correct oblique-camera bboxes during conversion (default `none`; needs `--flight-record`) |
+| `--bbox-correction {none,analytical,3d}` | correct oblique-camera bboxes during conversion (default `none`; needs `--flight-record`). `3d` gives the most realistic sizes. Cars are corrected with a 1.15 m silhouette height (shoulder, not roof); the output height stays the vehicle height |
 | `--camera-model KEY` | camera model for HFOV/resolution (default `mavic3pro-standard`) |
 | `--hfov-deg FLOAT` | override horizontal FOV |
 | `--use-gps-cam-pos` | use the drone GPS position as camera position instead of the homography-derived one |

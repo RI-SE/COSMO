@@ -134,6 +134,10 @@ def test_precorrected_input_is_recognised():
 
 def test_precorrected_uses_height_model_without_moving_boxes():
     class Model:  # analytical corrector stand-in: shift grows with the assumed height
+        @staticmethod
+        def correction_height(label, h):
+            return h
+
         def _correct_analytical(self, cx, cy, w, h, yaw, label, heading, h_veh):
             from types import SimpleNamespace
             return SimpleNamespace(x=0.1 * cx + 0.2 * h_veh, y=0.1 * cy, length=4.0 + 0.1 * h_veh, width=1.8)
@@ -150,6 +154,10 @@ def test_camera_terms_add_bias(tmp_path):
     from types import SimpleNamespace
 
     class Model:
+        @staticmethod
+        def correction_height(label, h):
+            return h
+
         def __init__(self, height=100.0):
             self.camera = SimpleNamespace(drone_height=height, gimbal_pitch_deg=-60.0, camera_azimuth_deg=0.0,
                                           stddev={"drone_height": 0.0})

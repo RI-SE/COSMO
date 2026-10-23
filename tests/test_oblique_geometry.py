@@ -59,7 +59,7 @@ def test_analytical_correction_recovers_car_size(x, y, heading):
 
     cx, cy, w, h, yaw = _annotated_box(x, y, heading)
     world_heading = heading  # what COSMO derives from the box orientation through H
-    result = corrector.correct(cx, cy, w, h, yaw, "car", world_heading, CAR[2])
+    result = corrector.correct(cx, cy, w, h, yaw, "car", world_heading, CAR[2], effective_height=True)
     raw = BboxCorrector(_camera(), H)._correct_analytical(cx, cy, w, h, yaw, "car", world_heading, 0.0)
     # Correction moves towards the true footprint: smaller than uncorrected, close to the real car. The
     # remaining size error is the image rectangle's own overshoot under perspective (up to ~0.5 m for a car
@@ -86,7 +86,7 @@ def test_3d_fit_records_residual_and_entry():
     H = _homography()[0]
     corrector = BboxCorrector(_camera(), H, mode="3d")
     box = _annotated_box(15.0, 20.0, 0.0)
-    result = corrector.correct(*box, "car", 0.0, CAR[2])
+    result = corrector.correct(*box, "car", 0.0, CAR[2], effective_height=True)
     assert result.method == "3d" and result.fit_residual is not None and result.fit_residual < 1.0
     assert corrector._correct_analytical(*box, "car", 0.0, CAR[2]).fit_residual is None
 
@@ -94,3 +94,19 @@ def test_3d_fit_records_residual_and_entry():
     entry = result.oblique_entry((raw[0] / raw[2], raw[1] / raw[2]))
     assert entry[0] == "3d" and float(entry[1]) > 0 and entry[2] == "1.5" and float(entry[3]) < 1.0
     assert box_quality([{"name": "oblique", "val": entry}])["oblique"] == entry
+
+
+def test_cars_are_corrected_with_the_silhouette_height():
+    """A real car's far outline is the shoulder: the correction uses 1.15 m, the output keeps 1.5 m."""
+    from cosmo.corrections.oblique import SILHOUETTE_HEIGHTS
+
+    H = _homography()[0]
+    corrector = BboxCorrector(_camera(), H)
+    box = _annotated_box(15.0, 20.0, 0.0)
+    car = corrector.correct(*box, "Car", 0.0, 1.5)
+    assert car.height == 1.5 and car.correction_height == SILHOUETTE_HEIGHTS["car"]
+    assert car.oblique_entry((0.0, 0.0))[2] == "1.15"
+    same = corrector._correct_analytical(*box, "car", 0.0, SILHOUETTE_HEIGHTS["car"])
+    assert (car.x, car.y, car.length, car.width) == pytest.approx((same.x, same.y, same.length, same.width))
+    van = corrector.correct(*box, "van", 0.0, 2.2)
+    assert van.correction_height is None and van.oblique_entry((0.0, 0.0))[2] == "2.2"
