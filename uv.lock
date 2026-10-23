@@ -1975,7 +1975,7 @@ dependencies = [
 [[package]]
 name = "orbit-georef"
 version = "0.1.2"
-source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&branch=dev-uncertain#114c47620d754a75af88ac7eab6cdbbef4916e64" }
+source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&branch=dev-uncertain#543fb0eb2a721902eaf9162062e026b048ef7aa0" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },

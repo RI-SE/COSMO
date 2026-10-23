@@ -465,11 +465,14 @@ def main(argv=None) -> int:
                 if output_coords == "geo":
                     _drop_rbbox(od_data)
 
+            vec_list = od_data.get("vec")
+            if not isinstance(vec_list, list):
+                od_data["vec"] = []
+                vec_list = od_data["vec"]
+            # How this box was corrected (same entry as in the cosmo convert companion)
+            vec_list.append({"name": "oblique", "val": res.oblique_entry(_apply_homography(H, cx, cy))})
+
             if stabilize_size:
-                vec_list = od_data.get("vec")
-                if not isinstance(vec_list, list):
-                    od_data["vec"] = []
-                    vec_list = od_data["vec"]
                 if output_coords == "pixel":
                     vec_list.append({"name": "size_deviation", "val": [dev_pw, dev_ph]})
                 elif output_coords == "geo":

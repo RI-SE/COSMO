@@ -78,3 +78,19 @@ def test_height_estimate_recovers_vehicle_height():
     h_eff, sigma = estimate_height(corrector, observations)
     assert h_eff == pytest.approx(CAR[2], abs=0.3) and sigma >= 0.1
     assert estimate_height(corrector, observations[:5]) is None  # too few frames
+
+
+def test_3d_fit_records_residual_and_entry():
+    from cosmo.converters.quality import box_quality
+
+    H = _homography()[0]
+    corrector = BboxCorrector(_camera(), H, mode="3d")
+    box = _annotated_box(15.0, 20.0, 0.0)
+    result = corrector.correct(*box, "car", 0.0, CAR[2])
+    assert result.method == "3d" and result.fit_residual is not None and result.fit_residual < 1.0
+    assert corrector._correct_analytical(*box, "car", 0.0, CAR[2]).fit_residual is None
+
+    raw = H @ [box[0], box[1], 1.0]
+    entry = result.oblique_entry((raw[0] / raw[2], raw[1] / raw[2]))
+    assert entry[0] == "3d" and float(entry[1]) > 0 and entry[2] == "1.5" and float(entry[3]) < 1.0
+    assert box_quality([{"name": "oblique", "val": entry}])["oblique"] == entry

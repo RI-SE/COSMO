@@ -48,7 +48,9 @@ and as `[su:default_used]` in provenance; a missing value is "unknown", never "e
   events and streams are copied from the input.
 - Variant B (`--companion-frames`) adds `frames`: per object a world `cuboid` and `vec` entries `velocity`,
   `acceleration`, `position_cov_rel` (`[EE, EN, NE, NN]`, m²), `sigma_heading` (rad), `sigma_size`
-  (`[σL, σW]`, m), `size_deviation`, `oblique` (`[method, shift_m, h_used]`), `origin`, `p_exist`, and with
+  (`[σL, σW]`, m), `size_deviation`, `oblique` (`[method, shift_m, h_used, fit_residual]`: correction method, centre shift by the
+  correction, height used, and the 3d fit's final loss in px² — also when it fell back to `analytical`; for input
+  corrected by `cosmo correct` copied from its per-box `oblique` entry), `origin`, `p_exist`, and with
   `--smooth-kinematics` `velocity_cov`/`acceleration_cov`. `frame_properties.timestamp` is the OSI time in
   seconds, the join key with the MCAP.
 

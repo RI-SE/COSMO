@@ -27,6 +27,7 @@ SIGMA_ENTRY = "sigma_px"
 ORIGIN_ENTRY = "origin"
 GAP_DISTANCE_ENTRY = "gap_distance"
 P_EXIST_ENTRY = "p_exist"
+OBLIQUE_ENTRY = "oblique"  # [method, shift_m, h_used, fit_residual], written by cosmo correct / convert
 
 # SPEC P7 defaults (all basis "assumed")
 DEFAULT_SIGMA_REL = (0.02, 0.02, 0.04, 0.04)  # cx, cy, w, h as a fraction of sqrt(w*h)
@@ -66,6 +67,7 @@ def box_quality(vec: Any) -> Dict[str, Any]:
         "origin": origin,
         "gap_distance": newest(GAP_DISTANCE_ENTRY),
         "p_exist": newest(P_EXIST_ENTRY),
+        "oblique": [str(v) for v in values[OBLIQUE_ENTRY]] if isinstance(values.get(OBLIQUE_ENTRY), list) else None,
     }
 
 
@@ -168,11 +170,12 @@ class Propagation:
         J = self.T @ jacobian(self.transformer, cx, cy)
         if self.corrector is not None:
             cov_px, cov_bias, size_h, oblique = self._oblique_terms(s, label_type, sigma)
+            if self.precorrected:
+                oblique = self._precorrected_entry(quality, s)
         else:
             cov_px = J @ np.diag([sigma[0] ** 2, sigma[1] ** 2]) @ J.T
             cov_bias, size_h = np.zeros((2, 2)), (0.0, 0.0)
-            oblique = ["cosmo_correct" if self.precorrected else "none", "unknown" if self.precorrected else "0",
-                       f"{s['h_veh']:g}"]
+            oblique = self._precorrected_entry(quality, s) if self.precorrected else ["none", "0", f"{s['h_veh']:g}"]
         cov_noise = cov_px + self.frame_cov(frame_no, J)
         if self.cov_image is not None:
             cov_bias = cov_bias + self.cov_image
@@ -212,11 +215,16 @@ class Propagation:
             cov_h = cov_h + np.outer(g, g) * sigma_p ** 2
             size_var = size_var + ((lw_p - base_lw) / step * sigma_p) ** 2
         size_h = np.sqrt(size_var)
-        if self.precorrected:  # the box is already corrected: its raw position is not known here
-            return cov_px, cov_h, (float(size_h[0]), float(size_h[1])), ["cosmo_correct", "unknown", f"{h:g}"]
-        shift = float(np.linalg.norm(base_xy - np.array(self._raw_xy(cx, cy))))
-        method = s["oblique"].method if s.get("oblique") is not None else "analytical"
-        return cov_px, cov_h, (float(size_h[0]), float(size_h[1])), [method, f"{shift:.3f}", f"{h:g}"]
+        if s.get("oblique") is not None:
+            entry = s["oblique"].oblique_entry(self._raw_xy(cx, cy))
+        else:  # precorrected input; replaced by the entry cosmo correct wrote
+            entry = ["cosmo_correct", "unknown", f"{h:g}"]
+        return cov_px, cov_h, (float(size_h[0]), float(size_h[1])), entry
+
+    @staticmethod
+    def _precorrected_entry(quality: Dict[str, Any], s: Dict[str, Any]) -> List[str]:
+        """The `oblique` entry cosmo correct wrote (method etc. of the real correction), else a placeholder."""
+        return quality.get("oblique") or ["cosmo_correct", "unknown", f"{s['h_veh']:g}"]
 
     def _height_sigma(self, oid: str, h: float) -> float:
         """Sigma of the vehicle height: the per-object estimate if there is one, else the class prior."""

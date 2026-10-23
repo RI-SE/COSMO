@@ -38,6 +38,15 @@ class CorrectionResult:
     width: float
     height: float
     method: str  # "analytical" | "3d"
+    # 3d mode: final loss of the fit (px², weighted centre + size mismatch); also set when the fit did not
+    # converge and the analytical result was kept (method "analytical")
+    fit_residual: float | None = None
+
+    def oblique_entry(self, raw_xy: tuple[float, float]) -> list[str]:
+        """OpenLABEL vec value [method, shift_m, h_used, fit_residual] (strings; SPEC P5)."""
+        shift = float(np.hypot(self.x - raw_xy[0], self.y - raw_xy[1]))
+        residual = "" if self.fit_residual is None else f"{self.fit_residual:.3g}"
+        return [self.method, f"{shift:.3f}", f"{self.height:g}", residual]
 
 
 AZIMUTH_WARN_DEG = 20.0
@@ -357,10 +366,10 @@ class BboxCorrector:
             return CorrectionResult(
                 x=x0 + dX, y=y0 + dY, z=0.0,
                 length=float(L_fit), width=float(W_fit), height=h_veh,
-                method="3d",
+                method="3d", fit_residual=float(result.fun),
             )
 
         log.debug("3D fitting did not converge (fun=%.1f); using analytical result", result.fun)
         return CorrectionResult(x=initial.x, y=initial.y, z=0.0,
                                 length=initial.length, width=initial.width, height=h_veh,
-                                method="analytical")
+                                method="analytical", fit_residual=float(result.fun))

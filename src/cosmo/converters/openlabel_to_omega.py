@@ -774,15 +774,15 @@ def _estimate_heights(frames, objects_meta, H, corrector, log) -> Dict[str, Tupl
 
 
 def is_precorrected(root: Dict[str, Any]) -> bool:
-    """True for OpenLABEL written by `cosmo correct` (world cuboids or its size_deviation entries)."""
+    """True for OpenLABEL written by `cosmo correct` (world cuboids, or its oblique/size_deviation entries)."""
     for frame in (root.get("frames") or {}).values():
         objects = (frame.get("objects") or {}).values()
         for od in objects:
             data = od.get("object_data") or {}
             if any(c.get("coordinate_system") == "world" for c in data.get("cuboid") or [] if isinstance(c, dict)):
                 return True
-            if any(str(e.get("name", "")).startswith("size_deviation") for e in data.get("vec") or []
-                   if isinstance(e, dict)):
+            if any(str(e.get("name", "")).startswith("size_deviation") or e.get("name") == "oblique"
+                   for e in data.get("vec") or [] if isinstance(e, dict)):
                 return True
         if objects:  # cosmo correct marks every box; the first frame with boxes decides
             return False

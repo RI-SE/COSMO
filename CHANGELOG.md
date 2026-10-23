@@ -21,6 +21,8 @@ All notable changes to COSMO are documented here. Format follows
 - `--sensor-data`: OSI SensorData topic with existence probability, measurement state and RMS errors.
 - `--camera-uncertainty` (opt-in): camera height, gimbal pitch and azimuth error in the oblique-correction
   uncertainty (`BboxCorrector.with_camera`; `DroneCamera.stddev` from the flight record).
+- `cosmo correct` writes a per-box `oblique` entry `[method, shift_m, h_used, fit_residual]` (3d fit loss, also
+  for fallbacks to analytical); `cosmo convert` copies it into the companion for pre-corrected input.
 - `--estimate-height` (opt-in, experimental): per-object effective vehicle height from the track
   (`cosmo.corrections.height_estimate`), written as `h_eff`/`h_eff_sigma` in the companion. Probably does not
   give good results yet (implausibly low heights on real annotations); not for data products.
