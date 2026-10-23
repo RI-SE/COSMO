@@ -175,3 +175,18 @@ def test_camera_terms_add_bias(tmp_path):
     # dx/dH = 0.01 with sigma 1.0 m (assumed): + 1e-4 m² in x
     assert out["cov_bias"][0, 0] - plain["cov_bias"][0, 0] == pytest.approx(1e-4)
     assert "camera" in with_camera.run_quality()["defaults_used"]
+
+
+def test_convert_provenance_marks_companion_as_quality(tmp_path):
+    from dataprov import ProvenanceChain
+
+    from cosmo.cli.convert import main
+
+    _convert(tmp_path, write_mcap=False)  # writes ol.json and calib.json
+    prov = tmp_path / "prov.json"
+    assert main([str(tmp_path / "ol.json"), "--calibration", str(tmp_path / "calib.json"), "--output-prefix",
+                 str(tmp_path / "cli"), "--no-mcap", "--prov-out", str(prov)]) == 0
+    chain = ProvenanceChain.load(str(prov))
+    assert [Path(o["path"]).name for o in chain.get_outputs(role="quality")] == ["cli.companion.json"]
+    assert [Path(o["path"]).name for o in chain.get_outputs(role="primary")] == ["cli.csv"]
+    assert "su" in json.loads(prov.read_text())["prefix"]

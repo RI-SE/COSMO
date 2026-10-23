@@ -241,19 +241,13 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
         tool_version = "unknown"
 
     from dataprov import ProvenanceChain
-    from scenario_uncertainty.provenance import (
-        declare_namespace,
-        join_warnings,
-        namespaces,
-        output_format,
-    )
+    from scenario_uncertainty.provenance import join_warnings, namespaces, output_format
 
     from cosmo.app.convert_app import quality_properties, quality_warnings
 
     prov_in = args.prov_in
     if prov_in and Path(prov_in).exists():
-        chain = ProvenanceChain.load(prov_in)
-        declare_namespace(chain)
+        chain = ProvenanceChain.load(prov_in, custom_namespaces=namespaces())
     else:
         chain = ProvenanceChain.create(
             entity_id=f"convert:{Path(openlabel).stem}",
@@ -283,15 +277,13 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
 
     outputs: list[str] = []
     output_formats: list[str] = []
-    if result.csv_path:
-        outputs.append(str(result.csv_path))
-        output_formats.append("csv")
-    if result.mcap_path:
-        outputs.append(str(result.mcap_path))
-        output_formats.append("mcap")
-    if result.companion_path:
-        outputs.append(str(result.companion_path))
-        output_formats.append(output_format("world", 1))
+    output_roles: list[str] = []
+    for path, fmt, role in ((result.csv_path, "csv", "primary"), (result.mcap_path, "mcap", "primary"),
+                            (result.companion_path, output_format("world", 1), "quality")):
+        if path:
+            outputs.append(str(path))
+            output_formats.append(fmt)
+            output_roles.append(role)
 
     has_secondary_prov = any(p is not None for p in input_prov_files[1:])
 
@@ -303,6 +295,7 @@ def _record_provenance_convert(args, openlabel: str, result, start_time: datetim
         input_formats=input_formats,
         outputs=outputs,
         output_formats=output_formats,
+        output_roles=output_roles,
         arguments=" ".join(sys.argv),
         started_at=start_time.isoformat().replace("+00:00", "Z"),
         ended_at=end_time.isoformat().replace("+00:00", "Z"),

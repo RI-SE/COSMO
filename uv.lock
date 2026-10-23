@@ -530,7 +530,7 @@ trajectory-explorer = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dataprov" },
+    { name = "dataprov", specifier = ">=3.4.0" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "opendrive-map", git = "https://github.com/RI-SE/ORBIT.git?subdirectory=opendrive-map&tag=opendrive-map-v0.1.0" },
@@ -594,11 +594,11 @@ wheels = [
 
 [[package]]
 name = "dataprov"
-version = "3.2.0"
+version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ae/a5/a873ee8fa3ca9f3ae02bc1584119e4515cf656e203152796d564ad67d9eb/dataprov-3.2.0.tar.gz", hash = "sha256:e2c76cc3198c671e5953d20e2c39a0264ef4c91f1e04e9ff28343386995d9b93", size = 86968, upload-time = "2026-04-14T12:22:18.831Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/de/555bd14ead2050356974097c4ddfd7bee79b6e28874e55318103a55491ef/dataprov-3.4.0.tar.gz", hash = "sha256:2ddf910c7ed2629c319ef6902c8720a7d2bedca411068e295ea224799b74062a", size = 101115, upload-time = "2026-10-23T08:21:53.02Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/00/c5/520700bad30e9428bea54d54925656a001a99977ae54a79bae1bb7c0f8f9/dataprov-3.2.0-py3-none-any.whl", hash = "sha256:098891f4496e25d18185d53644b6724f7863181ae83b74ef5cbce83083513ac3", size = 48009, upload-time = "2026-04-14T12:22:17.642Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/c9/645342e4c77ebc7340a1e7ba4834f4fe7cb6a1bee814e26765da5d8d084f/dataprov-3.4.0-py3-none-any.whl", hash = "sha256:8c5aee86815bcaeedcc41c9386a2c8b7c99a6b5ebc100a9b6211324cb2824829", size = 53611, upload-time = "2026-10-23T08:21:51.714Z" },
 ]
 
 [[package]]
@@ -1975,7 +1975,7 @@ dependencies = [
 [[package]]
 name = "orbit-georef"
 version = "0.1.2"
-source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&branch=dev-uncertain#543fb0eb2a721902eaf9162062e026b048ef7aa0" }
+source = { git = "https://github.com/RI-SE/ORBIT.git?subdirectory=orbit-georef&branch=dev-uncertain#3ba442a8a702c801f662647ccd0f0bee6659177a" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },

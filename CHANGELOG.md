@@ -28,6 +28,8 @@ All notable changes to COSMO are documented here. Format follows
   give good results yet (implausibly low heights on real annotations); not for data products.
 
 ### Changed
+- Requires `dataprov>=3.4.0`. The convert provenance marks CSV/MCAP as `primary` and the companion OpenLABEL as
+  `quality` output roles; `cosmo correct`'s output is `primary`.
 - `convert_openlabel_to_omega` computes all samples first, then writes MCAP/CSV (same output as before).
 - Input corrected by `cosmo correct` is recognised: the companion records `cosmo_correct`, and with
   `--flight-record` the vehicle-height uncertainty is included (positions unchanged).

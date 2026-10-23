@@ -290,6 +290,7 @@ def _record_provenance_correct(
         input_formats=input_formats,
         outputs=[str(out_path)],
         output_formats=["json"],
+        output_roles=["primary"],
         arguments=" ".join(sys.argv),
         started_at=start_time.isoformat().replace("+00:00", "Z"),
         ended_at=end_time.isoformat().replace("+00:00", "Z"),
