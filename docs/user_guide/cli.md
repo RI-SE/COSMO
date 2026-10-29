@@ -49,11 +49,30 @@ cosmo convert INPUT.json [options]          # or --input / --openlabel INPUT.jso
 ### Inline bbox correction
 | Option | Description |
 |---|---|
-| `--bbox-correction {none,analytical,3d}` | correct oblique-camera bboxes during conversion (default `none`; needs `--flight-record`) |
+| `--bbox-correction {none,analytical,3d}` | correct oblique-camera bboxes during conversion (default `none`; needs `--flight-record`). `3d` gives the most realistic sizes. Cars are corrected with a 1.15 m silhouette height (shoulder, not roof); the output height stays the vehicle height |
 | `--camera-model KEY` | camera model for HFOV/resolution (default `mavic3pro-standard`) |
 | `--hfov-deg FLOAT` | override horizontal FOV |
 | `--use-gps-cam-pos` | use the drone GPS position as camera position instead of the homography-derived one |
 | `--stabilize-size` | use per-object mean dimensions instead of per-frame ones |
+
+### Uncertainty
+See [outputs: companion OpenLABEL and SensorData](../reference/outputs-omega-prime.md#uncertainty-companion-openlabel-and-sensordata).
+
+| Option | Description |
+|---|---|
+| `--video-quality PATH` | FieldDataLab `<video>.quality.json` of the annotated video: per-frame stabilisation error |
+| `--no-companion` | do not write `<prefix>.companion.json` (written by default when a homography is known) |
+| `--companion-frames` | companion with per-frame world cuboids, covariance and σ (variant B; about 3× the CSV size) |
+| `--smooth-kinematics` | Kalman/RTS-smoothed position, velocity and acceleration in all outputs instead of raw differences |
+| `--jerk-psd Q` | smoother process noise, white-jerk PSD in m²/s⁵ (default 2.0) |
+| `--camera-uncertainty` | add camera height, gimbal pitch and azimuth error (flight-record stddev combined with assumed sensor error: 1 m, 0.5°, 1°) to the oblique-correction uncertainty |
+| `--estimate-height` | **Experimental, not recommended yet.** Estimate each vehicle's effective height from how its corrected size changes along the track (needs `--bbox-correction`, a moving vehicle and ≥ 20 frames; others keep the class default). Changes positions and sizes of those objects. See the warning below |
+| `--sensor-data` | also write an OSI `SensorData` topic (`sensor_data`) with existence probability and RMS errors |
+
+> **Warning: `--estimate-height` probably does not produce good results at the moment.** It recovers the height
+> on synthetic data, but on real annotations (GbgSaroRound 2025-10-16, human-edited boxes) it gave implausibly low
+> heights (median 0.9 m for cars) and did not make sizes more consistent; the other distance-dependent size
+> errors of image-drawn boxes are absorbed into the height. Use it only for experiments, not for data products.
 
 ### Provenance
 | Option | Description |

@@ -19,12 +19,14 @@ KNOWN_CAMERAS: dict[str, dict] = {
 class DroneCamera:
     drone_height: float         # AGL meters
     gimbal_pitch_deg: float     # negative = downward, e.g. -83
-    camera_azimuth_deg: float   # drone_yaw + gimbal_yaw, absolute degrees
+    camera_azimuth_deg: float   # viewing direction, degrees clockwise from north (DJI gimbal yaw is absolute)
     image_width: int
     image_height: int
     hfov_deg: float
     drone_lat: float | None = None
     drone_lon: float | None = None
+    # Flight-record standard deviations over the sequence: drone_height (m), gimbal_pitch_deg, camera_azimuth_deg
+    stddev: dict | None = None
 
     @property
     def K(self) -> np.ndarray:
@@ -87,10 +89,11 @@ def load_camera_from_flight_record(
     stats = seq["stats"]
 
     drone_height = float(stats["osd"]["height_agl"]["mean"])
-    drone_yaw = float(stats["osd"]["yaw"]["mean"])
     gimbal_pitch = float(stats["gimbal"]["pitch"]["mean"])
     gimbal_yaw = float(stats["gimbal"]["yaw"]["mean"])
-    camera_azimuth = drone_yaw + gimbal_yaw
+    # DJI flight records log the gimbal yaw as an absolute heading (within ~±20° of the drone yaw in all our
+    # campaigns), not relative to the drone; adding the drone yaw doubled the heading
+    camera_azimuth = gimbal_yaw
 
     cam_defaults = KNOWN_CAMERAS.get(camera_model, {})
     resolved_hfov = hfov_deg if hfov_deg is not None else cam_defaults.get("hfov_deg", 73.0)
@@ -104,7 +107,16 @@ def load_camera_from_flight_record(
         drone_lat = None
         drone_lon = None
 
+    def _stddev(*keys):
+        try:
+            values = [float(stats[group][name]["stddev"]) for group, name in keys]
+        except (KeyError, TypeError, ValueError):
+            return None
+        return sum(v * v for v in values) ** 0.5
+
     cam = DroneCamera(
+        stddev={"drone_height": _stddev(("osd", "height_agl")), "gimbal_pitch_deg": _stddev(("gimbal", "pitch")),
+                "camera_azimuth_deg": _stddev(("gimbal", "yaw"))},
         drone_height=drone_height,
         gimbal_pitch_deg=gimbal_pitch,
         camera_azimuth_deg=camera_azimuth,

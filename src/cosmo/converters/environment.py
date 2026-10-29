@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -102,6 +102,47 @@ def read_flight_record_meta(path: str, sequence: int = 0) -> Tuple[Optional[date
     return start_utc, lat, lon
 
 
+# FieldDataLab vidrectify writes this into its provenance output log once its output is frame-aligned;
+# older vidrectify output dropped the first frame, so annotated frame k was SRT frame k + 1
+FRAME_ALIGNED_NOTE = "Frame-aligned: output frame k is input frame k."
+RECTIFY_TOOL = "vidrectify"
+
+
+def frame_offset_from_provenance(prov_path: Optional[str]) -> Optional[int]:
+    """SRT frame offset of the annotated video from its provenance chain, or None if it can't be told."""
+    if not prov_path:
+        return None
+    try:
+        with open(prov_path, encoding="utf-8") as f:
+            chain = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    logs = [activity.get("dataprov:outputLog", "") for activity in _activities(chain)
+            if RECTIFY_TOOL in activity.get("dataprov:arguments", "").split(" ", 1)[0]]
+    if not logs:
+        return None
+    return 0 if FRAME_ALIGNED_NOTE in logs[-1] else 1
+
+
+def _activities(node: Any):
+    """All provenance activities, including those in nested (inlined) bundles."""
+    if isinstance(node, dict):
+        if "dataprov:arguments" in node:
+            yield node
+        for value in node.values():
+            yield from _activities(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _activities(value)
+
+
+def shift_srt_frames(frames: List[SrtFrame], frame_offset: int) -> List[SrtFrame]:
+    """Re-index SRT frames to annotated-video frames: annotated frame k is SRT frame k + frame_offset."""
+    if frame_offset == 0:
+        return frames
+    return [replace(f, frame_idx=f.frame_idx - frame_offset) for f in frames]
+
+
 @dataclass(frozen=True)
 class FrameClock:
     """Linear frame -> absolute time model: utc(frame) = t0_utc + frame * period_s."""
@@ -191,37 +232,94 @@ def fog_level(visibility_km: float) -> str:
 # OpenLABEL weather
 # -----------------------------------------------------------------------------
 
+# Weather fields COSMO maps to OSI, as named in SAVANT tag/context data. Old markit output (before SAVANT 2.5)
+# has one WeatherTag/WeatherContext with all fields; newer output one tag per value, typed by its scenario
+# ontology class (WeatherRain, CloudinessOvercast, ...), and drops values without a class (none, unknown).
+# Field names are unique across categories, so tags are read by field name whatever their type.
+WEATHER_FIELDS = ("precipitation", "precipitation_intensity", "particulates", "visibility_km", "cloud_cover",
+                  "time_of_day", "sun_position")
+# Newer files store numeric values under the scenario-ontology property name
+_FIELD_ALIASES = {"environmentVisibilityValue": "visibility_km"}
+_OLD_CONTEXT_TYPE = "WeatherContext"
+# Fields that only apply where their parent field has a value (an intensity without precipitation reads as rain)
+_DEPENDENT_FIELDS = {"precipitation_intensity": "precipitation"}
+
+
 def _named_values(data: Dict[str, Any]) -> Dict[str, Any]:
     """Flatten OpenLABEL text/num/boolean entries into {name: val}."""
     return {e["name"]: e.get("val") for kind in ("text", "num", "boolean")
             for e in data.get(kind, []) or [] if "name" in e}
 
 
+def _newest(vec: Dict[str, Any], name: str) -> Any:
+    val = vec.get(name)
+    return (val[0] if val else None) if isinstance(val, list) else val
+
+
+def _weather_values(data: Dict[str, Any]) -> Dict[str, Tuple[Any, Tuple]]:
+    """Weather fields of one tag/context: {field: (value, rank)}; higher rank = better source.
+
+    Rank: a person's edit first (newest annotator not markit_*), then VLM agreement, then confidence.
+    """
+    values = _named_values(data)
+    vec = {e["name"]: e.get("val") for e in data.get("vec", []) or [] if "name" in e}
+    out = {}
+    for name, value in values.items():
+        field = _FIELD_ALIASES.get(name, name)
+        if field not in WEATHER_FIELDS or value is None:
+            continue
+        annotator = _newest(vec, f"{name}_annotator")
+        rank = (annotator is not None and not str(annotator).startswith("markit_"),
+                values.get(f"{name}_agreement") or 0.0, _newest(vec, f"{name}_confidence") or 0.0)
+        out[field] = (value, rank)
+    return out
+
+
+def _best(candidates: List[Dict[str, Tuple[Any, Tuple]]]) -> Dict[str, Any]:
+    """Per field, the value from the best-ranked candidate (first one on ties)."""
+    best: Dict[str, Tuple[Any, Tuple]] = {}
+    for candidate in candidates:
+        for field, (value, rank) in candidate.items():
+            if field not in best or rank > best[field][1]:
+                best[field] = (value, rank)
+    return {field: value for field, (value, _) in best.items()}
+
+
 @dataclass(frozen=True)
 class WeatherAnnotations:
-    """Sequence-level WeatherTag values plus frame-interval WeatherContext values (contexts win)."""
+    """Sequence-level weather from tags plus frame-interval values from contexts (contexts win).
+
+    Fields described by class-typed contexts (newer SAVANT) are unknown outside those contexts: there the
+    VLM saw none of the context's values, or could not tell.
+    """
     global_values: Dict[str, Any]
     intervals: List[Tuple[int, int, Dict[str, Any]]]
+    interval_only: frozenset = frozenset()
 
     def for_frame(self, frame_idx: int) -> Dict[str, Any]:
-        for start, end, values in self.intervals:
+        values = {k: v for k, v in self.global_values.items() if k not in self.interval_only}
+        for start, end, interval_values in self.intervals:
             if start <= frame_idx <= end:
-                return values
-        return self.global_values
+                values.update(interval_values)
+        for field, parent in _DEPENDENT_FIELDS.items():
+            if parent in self.interval_only and field in self.global_values and parent in values:
+                values.setdefault(field, self.global_values[field])
+        return values
 
 
 def load_weather(root: Dict[str, Any]) -> WeatherAnnotations:
-    global_values: Dict[str, Any] = {}
-    for tag in (root.get("tags") or {}).values():
-        if tag.get("type") == "WeatherTag":
-            global_values = _named_values(tag.get("tag_data") or {})
-    intervals = []
+    global_values = _best([_weather_values(tag.get("tag_data") or {}) for tag in (root.get("tags") or {}).values()])
+    intervals, interval_only = [], set()
     for ctx in (root.get("contexts") or {}).values():
-        if ctx.get("type") == "WeatherContext":
-            values = _named_values(ctx.get("context_data") or {})
-            for fi in ctx.get("frame_intervals") or []:
-                intervals.append((int(fi["frame_start"]), int(fi["frame_end"]), values))
-    return WeatherAnnotations(global_values, intervals)
+        values = _best([_weather_values(ctx.get("context_data") or {})])
+        if not values:
+            continue
+        if ctx.get("type") != _OLD_CONTEXT_TYPE:
+            interval_only.update(values)
+        for fi in ctx.get("frame_intervals") or []:
+            intervals.append((int(fi["frame_start"]), int(fi["frame_end"]), values))
+    interval_only.update(field for field, parent in _DEPENDENT_FIELDS.items() if parent in interval_only)
+    return WeatherAnnotations(global_values, intervals, frozenset(interval_only))
 
 
 def precipitation_level(weather: Dict[str, Any]) -> Optional[str]:

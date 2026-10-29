@@ -81,8 +81,8 @@ The CSV `role`/`role_name` columns carry the same role for every object (CIVIL w
 | `clouds.fractional_cloud_cover` | OpenLABEL weather `cloud_cover` ⁴ | clear → ZERO_OKTAS, partly_cloudy → FOUR_OKTAS (assumed 3–5 oktas), overcast → EIGHT_OKTAS |
 | temperature, pressure, humidity, wind | – | not set (no source yet) |
 
-⁴ `WeatherContext` (per frame interval) takes precedence over the sequence-level `WeatherTag`; both are written by
-SAVANT markit's VLM analysis.
+⁴ Weather contexts (per frame interval) take precedence over sequence-level weather tags; both are written by
+SAVANT markit's VLM analysis, in either SAVANT format ([inputs](inputs-openlabel.md#optional-weather-annotation)).
 
 Not exported: the road, junction, traffic, structures, notes and VLM-analysis tags. Road and junction layout is in the
 embedded OpenDRIVE map; the rest has no OSI field.

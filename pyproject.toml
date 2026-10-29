@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cosmo"
-version = "0.6.1"
+version = "0.7.0"
 description = "COSMO conversion tools (OpenLABEL -> OSI/MCAP + Omega-Prime CSV) with GUI"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy", "pandas", "pillow", "matplotlib", "dataprov", "reverse_geocoder", "pycountry", "orbit-georef", "opendrive-map"]
+dependencies = ["numpy", "pandas", "pillow", "matplotlib", "dataprov>=3.4.0", "reverse_geocoder", "pycountry", "orbit-georef", "opendrive-map", "scenario-uncertainty"]
 
 
 [dependency-groups]
@@ -29,8 +29,10 @@ trajectory-explorer  = [{include-group = "gui"}, {include-group = "mcap"}, {incl
 # orbit-georef and opendrive-map are standalone packages living as subdirectories
 # of the ORBIT repo, pinned here to per-lib git tags. Bump the tag to upgrade.
 [tool.uv.sources]
-orbit-georef = { git = "https://github.com/RI-SE/ORBIT.git", subdirectory = "orbit-georef", tag = "orbit-georef-v0.1.2" }
+orbit-georef = { git = "https://github.com/RI-SE/ORBIT.git", subdirectory = "orbit-georef", tag = "orbit-georef-v0.2.0" }
 opendrive-map = { git = "https://github.com/RI-SE/ORBIT.git", subdirectory = "opendrive-map", tag = "opendrive-map-v0.1.0" }
+# Released tag of scenario-uncertainty; bump the tag (and uv lock --upgrade-package scenario-uncertainty) for new versions
+scenario-uncertainty = { git = "https://github.com/das-rise/scenario-uncertainty.git", tag = "v0.1.0" }
 
 [project.scripts]
 cosmo = "cosmo.cli.main:main"

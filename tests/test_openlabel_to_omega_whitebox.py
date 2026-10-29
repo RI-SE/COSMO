@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from cosmo.converters.openlabel_to_omega import (  #
     convert_openlabel_to_omega,
@@ -27,6 +28,24 @@ def test_parse_openlabel_supports_rbbox_list_of_dicts():
     assert "0" in frames
     assert "1" in frames["0"]["objects"]
     assert frames["0"]["objects"]["1"]["rbbox"][:2] == [1.0, 2.0]
+
+
+def _frame_with_vec(vec):
+    obj = {"object_data": {"rbbox": [{"name": "shape", "val": [1, 2, 3, 4, 0.1]}], "vec": vec}}
+    return {"openlabel": {"frames": {"0": {"objects": {"1": obj}}}}}
+
+
+def test_parse_openlabel_reads_savant_confidence_newest_first():
+    # SAVANT layout: vec is a list of {name, val}; histories are newest first
+    vec = [{"name": "annotator", "val": ["markit_housekeeping(rot)", "markit_yolo"]},
+           {"name": "confidence", "val": [0.8888, 0.42]}]
+    _, frames = parse_openlabel(_frame_with_vec(vec))
+    assert frames["0"]["objects"]["1"]["confidence"] == 0.8888
+
+
+def test_parse_openlabel_missing_confidence_is_unknown():
+    _, frames = parse_openlabel(_frame_with_vec([{"name": "annotator", "val": ["markit_yolo"]}]))
+    assert frames["0"]["objects"]["1"]["confidence"] is None
 
 
 def test_load_alignment_prefers_georef_over_calibration(tmp_path: Path):
@@ -117,3 +136,23 @@ def test_convert_openlabel_to_omega_writes_csv_only(tmp_path: Path):
         # Ensure time is non-decreasing (rows are sorted by total_nanos)
         times = [int(r["total_nanos"]) for r in rows]
         assert times == sorted(times)
+
+
+def _write_georef(tmp_path: Path, method: str, matrix):
+    path = tmp_path / "georef.json"
+    path.write_text(json.dumps({"transform_method": method, "transformation_matrix": matrix}))
+    return str(path)
+
+
+def test_load_alignment_reads_legacy_unknown_projective_georef_as_homography(tmp_path: Path):
+    # ORBIT <= 0.8.0 labelled GUI homography exports "unknown"; the perspective row identifies them
+    matrix = [[0.05, 0.0, 1.0], [0.0, 0.05, 2.0], [1e-5, 2e-4, 1.0]]
+    with pytest.warns(UserWarning, match="read as homography"):
+        _, H, _ = load_alignment(None, _write_georef(tmp_path, "unknown", matrix), None)
+    np.testing.assert_allclose(H, matrix)
+
+
+def test_load_alignment_rejects_unknown_affine_looking_georef(tmp_path: Path):
+    matrix = [[0.05, 0.0, 1.0], [0.0, 0.05, 2.0], [0.0, 0.0, 1.0]]
+    with pytest.raises(ValueError, match="Unsupported ORBIT georef transform_method"):
+        load_alignment(None, _write_georef(tmp_path, "unknown", matrix), None)

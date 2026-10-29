@@ -7,16 +7,66 @@ All notable changes to COSMO are documented here. Format follows
 > (commits where `version` changed in `pyproject.toml`, and the commits between them). Dates are those
 > commit dates. They are best-effort summaries and may be incomplete.
 
-## [0.6.1] – unreleased
+## [0.7.0] – 2026-10-29
+
+Uncertainty tracking, following [scenario-uncertainty](https://github.com/das-rise/scenario-uncertainty) 0.1.0
+(`world` profile). Needs orbit-georef 0.2.0. Annotations converted with `--bbox-correction` before this version
+should be converted again (see Fixed).
+
+### Added
+- Uncertainty of the converted objects (scenario-uncertainty `world` profile): box σ, origin and `p_exist`
+  from SAVANT, georef image/datum error from orbit-georef, per-frame stabilisation error from
+  `--video-quality`; SPEC defaults when missing (listed, and warned in provenance).
+- Companion OpenLABEL `<prefix>.companion.json`, written by default: run and object quality, tags/contexts;
+  `--companion-frames` adds per-frame world cuboids with `position_cov_rel` and σ. Listed in provenance with
+  `su` properties and `[su:*]` warnings.
+- `--smooth-kinematics` (Kalman/RTS, constant acceleration, `--jerk-psd`): smoothed position, v and a with σ.
+  Off by default; raw finite differences are unchanged.
+- `--sensor-data`: OSI SensorData topic with existence probability, measurement state and RMS errors.
+- `--camera-uncertainty` (opt-in): camera height, gimbal pitch and azimuth error in the oblique-correction
+  uncertainty (`BboxCorrector.with_camera`; `DroneCamera.stddev` from the flight record).
+- `--frame-offset N|auto` (default `auto`): SRT alignment for FieldDataLab `vidrectify` output made before
+  2026-10-21, which dropped the first frame; detected from the `--prov-in` chain.
+- The per-box `confidence` from SAVANT is read (kept for later use; missing means unknown, not 1.0).
+- `cosmo correct` writes a per-box `oblique` entry `[method, shift_m, h_used, fit_residual]` (3d fit loss, also
+  for fallbacks to analytical); `cosmo convert` copies it into the companion for pre-corrected input.
+- `--estimate-height` (opt-in, experimental): per-object effective vehicle height from the track
+  (`cosmo.corrections.height_estimate`), written as `h_eff`/`h_eff_sigma` in the companion. Probably does not
+  give good results yet (implausibly low heights on real annotations); not for data products.
 
 ### Changed
+- Requires `dataprov>=3.4.0`. The convert provenance marks CSV/MCAP as `primary` and the companion OpenLABEL as
+  `quality` output roles; `cosmo correct`'s output is `primary`.
+- `convert_openlabel_to_omega` computes all samples first, then writes MCAP/CSV (same output as before).
+- Input corrected by `cosmo correct` is recognised: the companion records `cosmo_correct`, and with
+  `--flight-record` the vehicle-height uncertainty is included (positions unchanged).
+
+### Fixed
+- **Oblique correction placed the camera on the wrong side.** The camera azimuth was `drone_yaw + gimbal_yaw`,
+  but DJI flight records log the gimbal yaw as an absolute heading, so the heading was doubled (off by ~57° at
+  BorasEkas, ~92° at BorasKraklanda, ~180° at GbgSaroRound). The corrector now takes the viewing azimuth from the
+  georeference H (like the camera position) and warns when the flight record differs by more than 20°; the
+  flight-record loader uses the gimbal yaw alone. Affects `cosmo correct` and `cosmo convert --bbox-correction`.
+- **Cars are corrected with a silhouette height of 1.15 m** (`SILHOUETTE_HEIGHTS`), not the 1.5 m vehicle height:
+  a car's roof is narrower than its body, so the far outline seen obliquely is the shoulder. On human-edited
+  GbgSaroRound boxes (3d mode) cars were 1.61 m wide with 1.5 m, ≈ 1.8 m with the silhouette height. The output
+  height stays 1.5 m; the `oblique` entry records the height used. Other classes are unchanged.
+- **Analytical correction model:** replaced the move of "far" corners along camera rays (which skewed the box and
+  widened cars beside the camera) by removing the roof stretch δ = (P − C)·h/(H_c − h): centre − δ/2, each
+  dimension − |δ| along its axis. The 3d mode starts from this result. Tested against a synthetic pinhole camera.
+- Georef files from older ORBIT versions with `transform_method: "unknown"` are read (via orbit-georef 0.2.0).
+- Weather from SAVANT ≥ 2.5 (class-typed tags such as `WeatherRain`) was ignored; both SAVANT weather formats are
+  now read by field name. Old-format weather contexts no longer hide tag fields they don't mention.
+  The `WeatherNoPrecipitation` tag of SAVANT ≥ 2.6 (`precipitation: none`) gives OSI precipitation `NONE`.
+
+## [0.6.1] – 2026-10-14
+
+### Fixed
 - Vehicle roles: Train → PUBLIC_TRANSPORT (was CIVIL); AgriculturalVehicle and EmergencyVehicle → OTHER
   (was CIVIL), since OSI has no agricultural or generic emergency role.
 - Documentation restructured: README covers inputs, install and usage; mapping tables moved to
   `docs/reference/osi-mapping.md`; new input references for georef/calibration and the flight record;
   CLI reference covers all commands; quickstart merged into README/workflow; stale references removed.
-
-### Fixed
 - `--fps` (GUI: FPS override) did not override an `fps` in the georef or calibration file. Order is now
   `--srt`, `--fps`, georef, calibration, 30 fps.
 - A georef file with `"fps": null` crashed convert; null now falls through to the next source.

@@ -26,3 +26,6 @@ both from ORBIT with the same projection.
 - Without `--srt`, the frame period comes from `--fps`, else the georef/calibration `fps`, else 30 fps; DJI video is
   usually 29.97 fps. Pass the SRT of the annotated video ([SRT input](../reference/inputs-srt.md)).
 - A start-time warning between SRT and flight record usually means a wrong `--timezone`.
+- A one-frame (33 ms) time offset against the SRT: FieldDataLab `vidrectify` output made before 2026-10-21 dropped
+  the first frame. `--frame-offset auto` (default) detects it from `--prov-in`. A warning says when it can't (e.g.
+  annotations edited in SAVANT edit, which records no provenance yet); then pass `--frame-offset 1` for such data.

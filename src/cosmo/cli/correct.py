@@ -290,6 +290,7 @@ def _record_provenance_correct(
         input_formats=input_formats,
         outputs=[str(out_path)],
         output_formats=["json"],
+        output_roles=["primary"],
         arguments=" ".join(sys.argv),
         started_at=start_time.isoformat().replace("+00:00", "Z"),
         ended_at=end_time.isoformat().replace("+00:00", "Z"),
@@ -348,6 +349,8 @@ def main(argv=None) -> int:
     )
     corrector = BboxCorrector(cam, H, mode=args.bbox_correction, proj_string=proj_string,
                               use_gps_cam_pos=args.use_gps_cam_pos)
+    if corrector.azimuth_warning():
+        print(f"Warning: {corrector.azimuth_warning()}", flush=True)
 
     # For geo output: add coordinate_systems to root
     root = ol.get("openlabel", ol)
@@ -463,11 +466,14 @@ def main(argv=None) -> int:
                 if output_coords == "geo":
                     _drop_rbbox(od_data)
 
+            vec_list = od_data.get("vec")
+            if not isinstance(vec_list, list):
+                od_data["vec"] = []
+                vec_list = od_data["vec"]
+            # How this box was corrected (same entry as in the cosmo convert companion)
+            vec_list.append({"name": "oblique", "val": res.oblique_entry(_apply_homography(H, cx, cy))})
+
             if stabilize_size:
-                vec_list = od_data.get("vec")
-                if not isinstance(vec_list, list):
-                    od_data["vec"] = []
-                    vec_list = od_data["vec"]
                 if output_coords == "pixel":
                     vec_list.append({"name": "size_deviation", "val": [dev_pw, dev_ph]})
                 elif output_coords == "geo":

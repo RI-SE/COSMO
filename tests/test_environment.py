@@ -8,17 +8,20 @@ from pathlib import Path
 import pytest
 
 from cosmo.converters.environment import (
+    FRAME_ALIGNED_NOTE,
     EnvironmentSources,
     FrameClock,
     clock_from_srt,
     environment_fields,
     exposure_to_lux,
     fog_level,
+    frame_offset_from_provenance,
     illumination_level,
     load_weather,
     parse_srt,
     precipitation_level,
     read_flight_record_meta,
+    shift_srt_frames,
     solar_position,
 )
 
@@ -133,3 +136,101 @@ def test_environment_fields_only_set_available_sources():
     assert fields["unix_timestamp"] == int(datetime(2025, 10, 16, 11, 41, 1, tzinfo=timezone.utc).timestamp())
     assert fields["seconds_since_midnight"] == 13 * 3600 + 41 * 60 + 1  # CEST
     assert "sun_elevation" in fields and "ambient_illumination" not in fields
+
+
+def test_shift_srt_frames_maps_annotated_frame_to_later_srt_frame(tmp_path: Path):
+    srt = tmp_path / "v.srt"
+    srt.write_text(SRT_TEXT, encoding="utf-8")
+    frames = parse_srt(str(srt))
+    shifted = shift_srt_frames(frames, 1)
+    # Annotated frame 0 now carries the time of SRT frame 1
+    assert [f.frame_idx for f in shifted] == [-1, 0, 1]
+    assert shifted[1].local_time == frames[1].local_time
+    shifted_clock = clock_from_srt(shifted, "Europe/Stockholm")
+    original_clock = clock_from_srt(frames, "Europe/Stockholm")
+    assert abs((shifted_clock.utc(0) - original_clock.utc(1)).total_seconds()) < 0.002
+
+
+def _write_prov(tmp_path: Path, rectify_log: str | None, nested: bool = False) -> str:
+    activities = {"activity:step_1": {"dataprov:arguments": "/x/vidtools/vidconcat.py --output o",
+                                      "dataprov:outputLog": ""}}
+    if rectify_log is not None:
+        activities["activity:step_2"] = {
+            "dataprov:arguments": "/x/vidtools/vidrectify.py in.mp4 out.mp4",
+            "dataprov:outputLog": rectify_log,
+        }
+    # An orchestrator step that merely mentions vidrectify must not be taken for the tool itself
+    activities["activity:step_3"] = {"dataprov:arguments": "orchestrator --rectify",
+                                     "dataprov:outputLog": "vidrectify"}
+    if nested:
+        chain = {"activity": {}, "bundle": {"bundle:nested_0": {"activity": activities}}}
+    else:
+        chain = {"activity": activities}
+    path = tmp_path / "prov.json"
+    path.write_text(json.dumps(chain), encoding="utf-8")
+    return str(path)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_frame_offset_from_provenance_old_vidrectify_output(tmp_path: Path, nested):
+    log = "Video stabilization completed. Successfully stabilized 10/10 frames (100.0%)."
+    assert frame_offset_from_provenance(_write_prov(tmp_path, log, nested)) == 1
+
+
+def test_frame_offset_from_provenance_frame_aligned_output(tmp_path: Path):
+    log = f"Video stabilization completed. {FRAME_ALIGNED_NOTE}"
+    assert frame_offset_from_provenance(_write_prov(tmp_path, log)) == 0
+
+
+def test_frame_offset_unknown_without_vidrectify_step(tmp_path: Path):
+    assert frame_offset_from_provenance(_write_prov(tmp_path, None)) is None
+    assert frame_offset_from_provenance(None) is None
+    assert frame_offset_from_provenance(str(tmp_path / "missing.json")) is None
+
+
+def _new_format_root() -> dict:
+    """SAVANT >= 2.5: one tag per value typed by class; contexts only where it rains/snows."""
+    def tag(tag_type, name, val, kind="text", agreement=None, annotator="markit_vlm"):
+        data = {kind: [{"name": name, "val": val}],
+                "vec": [{"name": f"{name}_annotator", "val": [annotator]}, {"name": f"{name}_confidence", "val": [0.9]}]}
+        if agreement is not None:
+            data["num"] = data.get("num", []) + [{"name": f"{name}_agreement", "val": agreement}]
+        return {"type": tag_type, "tag_data": data}
+    return {
+        "tags": {"0": tag("CloudinessOvercast", "cloud_cover", "overcast", agreement=0.6),
+                 "1": tag("EnvironmentVisibility", "environmentVisibilityValue", 8.0, kind="num"),
+                 "2": tag("PrecipitationLight", "precipitation_intensity", "light"),
+                 "3": tag("WeatherRain", "precipitation", "rain"),
+                 # A person changed an older WeatherTag in edit: it wins over the VLM
+                 "4": tag("CloudinessClear", "cloud_cover", "clear", annotator="alice")},
+        "contexts": {"0": {"type": "WeatherRain", "frame_intervals": [{"frame_start": 5, "frame_end": 9}],
+                           "context_data": {"text": [{"name": "precipitation", "val": "rain"}]}}},
+    }
+
+
+def test_new_format_weather_by_field_name():
+    weather = load_weather(_new_format_root())
+    inside, outside = weather.for_frame(7), weather.for_frame(0)
+    assert inside["precipitation"] == "rain" and inside["precipitation_intensity"] == "light"
+    # Outside the rain context precipitation is unknown (none or not determinable), not the whole-video vote
+    assert "precipitation" not in outside and "precipitation_intensity" not in outside
+    assert outside["visibility_km"] == 8.0 and outside["cloud_cover"] == "clear"
+    assert environment_fields(7, EnvironmentSources(weather=weather)) == {
+        "precipitation": "LIGHT", "fog": "MODERATE_VISIBILITY", "cloud_cover": "ZERO_OKTAS"}
+
+
+def test_old_context_keeps_tag_values_it_does_not_mention():
+    weather = load_weather(_weather_root())
+    assert weather.for_frame(7)["cloud_cover"] == "overcast"
+
+
+def test_new_format_explicit_no_precipitation():
+    root = {"contexts": {
+        "0": {"type": "WeatherNoPrecipitation", "frame_intervals": [{"frame_start": 0, "frame_end": 4}],
+              "context_data": {"text": [{"name": "precipitation", "val": "none"}]}},
+        "1": {"type": "WeatherRain", "frame_intervals": [{"frame_start": 5, "frame_end": 9}],
+              "context_data": {"text": [{"name": "precipitation", "val": "rain"}]}}}}
+    weather = load_weather(root)
+    assert environment_fields(2, EnvironmentSources(weather=weather)) == {"precipitation": "NONE"}
+    assert environment_fields(7, EnvironmentSources(weather=weather)) == {"precipitation": "UNKNOWN"}
+    assert environment_fields(20, EnvironmentSources(weather=weather)) == {}

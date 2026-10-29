@@ -29,6 +29,7 @@ import json
 import math
 import os
 import re
+import warnings
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -51,6 +52,7 @@ try:
 except ImportError:  # pragma: no cover
     _read_map_offset = None
 
+from cosmo.converters import companion as companion_doc
 from cosmo.converters.environment import (
     DEFAULT_TIMEZONE,
     EnvironmentSources,
@@ -61,8 +63,14 @@ from cosmo.converters.environment import (
     load_weather,
     parse_srt,
     read_flight_record_meta,
+    shift_srt_frames,
 )
+from cosmo.converters.kinematics import DEFAULT_JERK_PSD, raw_finite_differences, smooth_tracks
 from cosmo.converters.ontology_mapper import OntologyMapper
+from cosmo.converters.quality import Propagation, box_quality
+from cosmo.converters.sensor_data import TOPIC as SENSOR_DATA_TOPIC
+from cosmo.converters.sensor_data import detected_object
+from cosmo.converters.sensor_data import sensor_data as sensor_data_message
 
 # -----------------------------------------------------------------------------
 # Defaults
@@ -286,6 +294,7 @@ def load_environment_sources(
     flight_record_sequence: int,
     georef_data_path: Optional[str],
     log: Callable[[str], None],
+    frame_offset: int = 0,
 ) -> EnvironmentSources:
     """Collect the optional time/position/weather sources; the SRT clock takes precedence over the flight record."""
     clock: Optional[FrameClock] = None
@@ -295,7 +304,7 @@ def load_environment_sources(
         fr_start, fr_lat, fr_lon = read_flight_record_meta(flight_record_path, flight_record_sequence)
 
     if srt_path:
-        srt_frames = parse_srt(srt_path)
+        srt_frames = shift_srt_frames(parse_srt(srt_path), frame_offset)
         if len(srt_frames) < 2:
             raise ValueError(f"SRT {srt_path!r} has fewer than two parsable entries")
         clock = clock_from_srt(srt_frames, timezone_name)
@@ -349,6 +358,19 @@ def _resolve_country_code(
         return 0
 
 
+# ORBIT <= 0.8.0 labelled GUI homography exports "unknown" (fixed in ORBIT commit 0015a0f)
+LEGACY_UNKNOWN_METHOD = "unknown"
+
+
+def _is_projective(matrix: Any) -> bool:
+    """True if a 3x3 matrix has perspective terms, which only a homography export can have."""
+    try:
+        m = np.asarray(matrix, dtype=np.float64)
+    except (TypeError, ValueError):
+        return False
+    return m.shape == (3, 3) and bool(np.any(m[2, :2] != 0.0))
+
+
 def load_alignment(
     calibration_path: Optional[str],
     georef_data_path: Optional[str],
@@ -368,7 +390,13 @@ def load_alignment(
 
     if georef:
         tm = (georef.get("transform_method") or "").lower()
-        if tm and tm != "homography":
+        if tm == LEGACY_UNKNOWN_METHOD and _is_projective(georef.get("transformation_matrix")):
+            warnings.warn(
+                f"{georef_data_path}: transform_method 'unknown' (legacy ORBIT export) read as homography, "
+                "since the matrix has perspective terms",
+                stacklevel=2,
+            )
+        elif tm and tm != "homography":
             raise ValueError(
                 f"Unsupported ORBIT georef transform_method='{georef.get('transform_method')}'. "
                 "Expected homography-style pixel->ground transform."
@@ -497,6 +525,26 @@ def make_vehicle_classification(
 # OpenLABEL parsing (SAVANT subset)
 # -----------------------------------------------------------------------------
 
+def _latest_vec_number(vec: Any, name: str) -> Optional[float]:
+    """Newest value of a numeric vec entry, or None when absent (missing means unknown, not 1.0).
+
+    SAVANT writes vec as a list of {name, val} with val newest first; a dict keyed by name is also accepted.
+    """
+    if isinstance(vec, dict):
+        entry = vec.get(name)
+    elif isinstance(vec, list):
+        entry = next((e for e in vec if isinstance(e, dict) and e.get("name") == name), None)
+    else:
+        entry = None
+    val = entry.get("val") if isinstance(entry, dict) else None
+    if isinstance(val, list):
+        val = val[0] if val else None
+    try:
+        return float(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_openlabel(ol: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
     root = ol.get("openlabel", ol)
 
@@ -541,13 +589,10 @@ def parse_openlabel(ol: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Dict
                 if isinstance(val, list) and len(val) >= 5:
                     rbbox = [float(val[0]), float(val[1]), float(val[2]), float(val[3]), float(val[4])]
 
-            conf = 1.0
-            vec = od_data.get("vec", {})
-            if isinstance(vec, dict) and "confidence" in vec and isinstance(vec.get("confidence"), dict):
-                conf = float(vec["confidence"].get("val", 1.0))
+            conf = _latest_vec_number(od_data.get("vec"), "confidence")
 
             if rbbox is not None:
-                objs_out[oid] = {"rbbox": rbbox, "confidence": conf}
+                objs_out[oid] = {"rbbox": rbbox, "confidence": conf, "quality": box_quality(od_data.get("vec"))}
 
         if objs_out:
             frames_out[frame_id] = {"objects": objs_out}
@@ -581,14 +626,227 @@ def convert_openlabel_to_omega(
     object_frame: str = "global",
     srt_path: Optional[str] = None,
     timezone_name: str = DEFAULT_TIMEZONE,
+    frame_offset: int = 0,
     flight_record_path: Optional[str] = None,
     flight_record_sequence: int = 0,
+    video_quality_path: Optional[str] = None,
+    companion_path: Optional[str] = None,
+    companion_frames: bool = False,
+    smooth_kinematics: bool = False,
+    jerk_psd: float = DEFAULT_JERK_PSD,
+    sensor_data: bool = False,
+    quality_report: Optional[Dict[str, Any]] = None,
+    height_model=None,
+    camera_uncertainty: bool = False,
+    estimate_height: bool = False,
 ) -> float:
     """
     Convert OpenLABEL -> Omega-Prime CSV and optionally OSI GroundTruth MCAP; returns the fps used.
 
-    Signature matches the former script version for Phase 1 compatibility.
+    The first parameters match the former script version. Uncertainty (scenario-uncertainty SPEC P5) is
+    computed when a companion file, SensorData, smoothing or a quality_report (filled in place) is asked for.
+    height_model (an analytical BboxCorrector) gives the vehicle-height uncertainty of input that `cosmo correct`
+    already corrected; it does not change any position. Opt-in: camera_uncertainty adds camera height, pitch
+    and azimuth error to the oblique terms; estimate_height replaces the class-default height of objects whose
+    track determines it (needs corrector; changes their position and size).
     """
+    log = _logger(log_fn)
+    ol = load_json(openlabel_path)
+    objects_meta, frames = parse_openlabel(ol)
+    root = ol.get("openlabel", ol)
+
+    mapper = OntologyMapper.from_openlabel(root)
+    if georef_data_path and odr_path and os.path.isfile(odr_path):
+        _check_proj_string_match(georef_data_path, odr_path)
+
+    fps, H, defaults = load_alignment(calibration_path, georef_data_path, fps_arg)
+    alignment_source = "georef-data" if georef_data_path else ("calibration" if calibration_path else "none")
+    log(f"[COSMO] Alignment source: {alignment_source} (H={'present' if H is not None else 'none'}, fps={fps})")
+    log(f"[COSMO] Applied xy_offset={xy_offset}, yaw_offset_deg={yaw_offset_rad * 180.0 / math.pi:.3f}, swap_xy={swap_xy}, flip_x={flip_x}, flip_y={flip_y}")
+    log(f"[COSMO] OpenDRIVE embedded: {'yes' if (odr_path and write_mcap and betterosi is not None and os.path.isfile(odr_path)) else 'no'}")
+    if write_mcap and betterosi is None:
+        log('[COSMO] MCAP requested but betterosi is not installed; will write CSV only.')
+
+    heights = _estimate_heights(frames, objects_meta, H, corrector, log) if estimate_height else {}
+    geometry = _Geometry(
+        H=H, corrector=corrector, defaults=defaults, towed_by=build_towed_by(root, objects_meta), heights=heights,
+        post=dict(swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y, yaw_offset_rad=yaw_offset_rad,
+                  xy_offset=xy_offset),
+        frame_off=_object_frame_offset(object_frame, odr_path, log),
+    )
+    obj_name_to_idx = _object_indices(objects_meta, frames, log)
+
+    dt = 1.0 / fps if fps > 0 else 1.0 / 30.0
+    env_sources = load_environment_sources(
+        root, 1.0 / dt, srt_path, timezone_name,
+        flight_record_path, flight_record_sequence, georef_data_path, log,
+        frame_offset=frame_offset,
+    )
+    if srt_path and env_sources.clock is not None:
+        dt = env_sources.clock.period_s
+
+    sorted_frames = _sorted_frames(frames)
+    if env_sources.srt_by_frame is not None and sorted_frames:
+        last_frame = sorted_frames[-1][1][0]
+        if last_frame not in env_sources.srt_by_frame:
+            log(f"[COSMO] Warning: OpenLABEL frame {last_frame} has no SRT entry; "
+                "is the SRT from the same (untrimmed) video?")
+
+    propagation = None
+    if H is not None and (companion_path or sensor_data or smooth_kinematics or quality_report is not None):
+        video_quality = _read_video_quality(video_quality_path, log)
+        precorrected = corrector is None and is_precorrected(root)
+        propagation = Propagation(H, georef_data_path, geometry.post, video_quality,
+                                  corrector or (height_model if precorrected else None), precorrected=precorrected,
+                                  camera_uncertainty=camera_uncertainty, heights=heights)
+
+    timeline = _build_timeline(sorted_frames, frames, objects_meta, geometry, _Classifier(mapper),
+                               obj_name_to_idx, dt, propagation)
+    if stabilize_size:
+        _apply_mean_size(timeline)
+    raw_finite_differences((f["t_sec"], f["samples"]) for f in timeline)
+    if propagation is not None:
+        # Always smoothed for the path-residual statistic; replaces the output only when asked for
+        smooth_tracks(((f["t_sec"], f["samples"]) for f in timeline), jerk_psd, replace=smooth_kinematics)
+        for s in (s for f in timeline for s in f["samples"]):
+            s["smoothed_output"] = smooth_kinematics and s.get("smoothed") is not None
+            if s["smoothed_output"]:  # averaged noise plus the bias that smoothing cannot reduce
+                s["cov_rel"] = s["smoothed"][1][:2, :2] + s["cov_bias"]
+    datum = propagation.cov_datum if propagation is not None else None
+
+    if write_mcap and betterosi is not None:
+        _write_mcap(
+            f"{out_prefix}.mcap", timeline, odr_path, strip_xodr_namespace, georef_data_path, country_code,
+            env_sources, geometry.frame_off if object_frame == "local" else None, log,
+            sensor_datum=datum if (sensor_data and propagation is not None) else None,
+            sensor_data=sensor_data and propagation is not None,
+        )
+    if propagation is not None:
+        settings = {"frame_offset_applied": frame_offset, "camera_uncertainty": camera_uncertainty,
+                    "height_estimate": {"objects": len(heights)} if estimate_height else None,
+                    "kinematics": {"method": "rts_constant_acceleration" if smooth_kinematics else "finite_difference",
+                                   "jerk_psd": jerk_psd if smooth_kinematics else None},
+                    "oblique_correction": _oblique_label(corrector, propagation)}
+        run = companion_doc.run_quality(
+            propagation.run_quality(), timeline,
+            _quality_inputs(openlabel_path, georef_data_path, video_quality_path), settings)
+        if companion_path:
+            proj_string, _, _ = _read_georef_geo(georef_data_path)
+            companion_doc.write(companion_path, companion_doc.build(
+                root, timeline, run, proj_string, companion_frames, f"COSMO {_cosmo_version()}", heights))
+            log(f"[COSMO] Companion OpenLABEL: {companion_path} ({'with' if companion_frames else 'without'} frames)")
+        if quality_report is not None:
+            quality_report.update({"run": run, "companion_path": companion_path,
+                                   "objects": companion_doc.object_stats(timeline, heights)})
+    elif companion_path or sensor_data or smooth_kinematics:
+        log("[COSMO] Warning: no homography; uncertainty, companion file, SensorData and smoothing skipped")
+    if write_csv:
+        _write_csv(f"{out_prefix}.csv", timeline)
+
+    print(
+        "Done. Wrote: "
+        f"{'[MCAP ' + out_prefix + '.mcap] ' if (write_mcap and betterosi is not None) else ''}"
+        f"{'[CSV ' + out_prefix + '.csv] ' if write_csv else ''}"
+    )
+    return 1.0 / dt
+
+
+def _estimate_heights(frames, objects_meta, H, corrector, log) -> Dict[str, Tuple[float, float]]:
+    """Per-object effective height from the raw boxes (SAVANT origins other than synthesized ones)."""
+    if corrector is None or H is None:
+        log("[COSMO] Warning: height estimation needs --bbox-correction (analytical or 3d); skipped")
+        return {}
+    from cosmo.converters.quality import SYNTHESIZED_ORIGINS
+    from cosmo.corrections.height_estimate import estimate_heights
+
+    observations: Dict[str, List[Tuple[Any, float]]] = {}
+    for frame_id, _ in _sorted_frames(frames):
+        for oid, od in frames[frame_id]["objects"].items():
+            if od["quality"]["origin"] in SYNTHESIZED_ORIGINS:
+                continue
+            cx, cy, _, _, yaw_img = od["rbbox"]
+            observations.setdefault(oid, []).append(
+                (od["rbbox"], angle_wrap(-float(yaw_img) + _h_rotation_angle(H, cx, cy))))
+    heights = estimate_heights(corrector, observations)
+    log(f"[COSMO] Height estimated for {len(heights)} of {len(observations)} object(s); others use class defaults")
+    log("[COSMO] Warning: --estimate-height is experimental and probably not reliable yet; not for data products")
+    return heights
+
+
+def is_precorrected(root: Dict[str, Any]) -> bool:
+    """True for OpenLABEL written by `cosmo correct` (world cuboids, or its oblique/size_deviation entries)."""
+    for frame in (root.get("frames") or {}).values():
+        objects = (frame.get("objects") or {}).values()
+        for od in objects:
+            data = od.get("object_data") or {}
+            if any(c.get("coordinate_system") == "world" for c in data.get("cuboid") or [] if isinstance(c, dict)):
+                return True
+            if any(str(e.get("name", "")).startswith("size_deviation") or e.get("name") == "oblique"
+                   for e in data.get("vec") or [] if isinstance(e, dict)):
+                return True
+        if objects:  # cosmo correct marks every box; the first frame with boxes decides
+            return False
+    return False
+
+
+def _oblique_label(corrector, propagation: Propagation) -> str:
+    if corrector is not None:
+        return getattr(corrector, "mode", "analytical")
+    return "cosmo_correct" if propagation.precorrected else "none"
+
+
+def _build_timeline(sorted_frames, frames, objects_meta, geometry: "_Geometry", classifier: "_Classifier",
+                    obj_name_to_idx: Dict[str, int], dt: float, propagation: Optional[Propagation]):
+    """Pass 1: world state (and uncertainty) of every box, frame by frame."""
+    timeline = []
+    for seq_idx, (frame_id, frame_key) in enumerate(sorted_frames):
+        frame_no = _frame_number(seq_idx, frame_key)
+        t_sec = frame_no * dt
+        samples = []
+        for oid, od in frames[frame_id]["objects"].items():
+            label_type = objects_meta.get(oid, {}).get("type", "other")
+            s = {**geometry.world(oid, label_type, od), "oid": oid, "idx": obj_name_to_idx.get(oid),
+                 **classifier.codes(label_type)}
+            if propagation is not None:
+                s.update(propagation.sample(s, od["quality"], frame_no, label_type), X_raw=s["X"], Y_raw=s["Y"])
+            samples.append(s)
+        timeline.append({"frame_no": frame_no, "t_sec": t_sec, "total_nanos": to_nanos(t_sec), "samples": samples})
+    return timeline
+
+
+def _read_video_quality(path: Optional[str], log) -> Optional[Dict[str, Any]]:
+    """The FieldDataLab video sidecar (scenario-uncertainty `video` profile), or None."""
+    if not path:
+        return None
+    from scenario_uncertainty import video as video_profile
+
+    document = video_profile.read(path)
+    if document is None:
+        log(f"[COSMO] Warning: video quality {path} missing or of an unsupported version; frame term unknown")
+    return document
+
+
+def _quality_inputs(openlabel_path: str, georef_data_path: Optional[str],
+                    video_quality_path: Optional[str]) -> Dict[str, Any]:
+    """Files the uncertainty came from, with their sha256 (SPEC P5 `inputs`)."""
+    inputs = {}
+    for name, path in (("openlabel", openlabel_path), ("georef", georef_data_path),
+                       ("video_quality", video_quality_path)):
+        if path and os.path.isfile(path):
+            inputs[name] = {"file": os.path.basename(path), "sha256": companion_doc.sha256_file(path)}
+    return inputs
+
+
+def _cosmo_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("cosmo")
+    except Exception:
+        return "unknown"
+
+
+def _logger(log_fn: Optional[Callable[[str], None]]) -> Callable[[str], None]:
+    """log_fn if it works, else print."""
     def _log(msg: str) -> None:
         if callable(log_fn):
             try:
@@ -597,414 +855,272 @@ def convert_openlabel_to_omega(
             except Exception:
                 pass
         print(msg, flush=True)
+    return _log
 
 
-    ol = load_json(openlabel_path)
-    objects_meta, frames = parse_openlabel(ol)
+def _object_frame_offset(object_frame: str, odr_path: Optional[str], log) -> Tuple[float, float, float]:
+    """Offset subtracted from object positions.
 
-    root = ol.get("openlabel", ol)
-    towed_by = build_towed_by(root, objects_meta)
-
-    mapper = OntologyMapper.from_openlabel(root)
-    if georef_data_path and odr_path and os.path.isfile(odr_path):
-        _check_proj_string_match(georef_data_path, odr_path)
-
-    fps, H, defaults = load_alignment(calibration_path, georef_data_path, fps_arg)
-    alignment_source = 'none'
-    if georef_data_path:
-        alignment_source = 'georef-data'
-    elif calibration_path:
-        alignment_source = 'calibration'
-    _log(f"[COSMO] Alignment source: {alignment_source} (H={'present' if H is not None else 'none'}, fps={fps})")
-    _log(f"[COSMO] Applied xy_offset={xy_offset}, yaw_offset_deg={yaw_offset_rad * 180.0 / math.pi:.3f}, swap_xy={swap_xy}, flip_x={flip_x}, flip_y={flip_y}")
-    _log(f"[COSMO] OpenDRIVE embedded: {'yes' if (odr_path and write_mcap and betterosi is not None and os.path.isfile(odr_path)) else 'no'}")
-    if write_mcap and betterosi is None:
-        _log('[COSMO] MCAP requested but betterosi is not installed; will write CSV only.')
-
-    # Object output frame. "global": absolute coords in the proj_string CRS (default).
-    # "local": coords shifted by the map's header <offset> so objects and the embedded
-    # OpenDRIVE share one frame; the offset is recorded in OSI proj_frame_offset.
-    frame_off = (0.0, 0.0, 0.0)
-    if object_frame == "local":
-        if not (odr_path and _read_map_offset and os.path.isfile(odr_path)):
-            raise ValueError(
-                "object_frame='local' requires --odr with a header <offset> "
-                "(and opendrive-map installed)."
-            )
-        frame_off = _read_map_offset(odr_path)
-        _log(f"[COSMO] object_frame=local; subtracting map offset {frame_off}")
-    elif object_frame != "global":
+    "global": absolute coords in the proj_string CRS (default). "local": coords shifted by the map's
+    header <offset> so objects and the embedded OpenDRIVE share one frame; the offset is recorded in
+    OSI proj_frame_offset.
+    """
+    if object_frame == "global":
+        return (0.0, 0.0, 0.0)
+    if object_frame != "local":
         raise ValueError(f"object_frame must be 'global' or 'local', got {object_frame!r}")
+    if not (odr_path and _read_map_offset and os.path.isfile(odr_path)):
+        raise ValueError(
+            "object_frame='local' requires --odr with a header <offset> "
+            "(and opendrive-map installed)."
+        )
+    frame_off = _read_map_offset(odr_path)
+    log(f"[COSMO] object_frame=local; subtracting map offset {frame_off}")
+    return frame_off
 
-    vt_name_to_code, vr_name_to_code, vt_default, vr_default = build_enum_code_maps()
 
-    # Assign indices: use numeric UID directly if possible, else fall back to sequential
+def _object_indices(objects_meta: Dict[str, Any], frames: Dict[str, Any], log) -> Dict[str, int]:
+    """OSI ids: the numeric UID if possible, else sequential; also for objects only seen in frames."""
     obj_name_to_idx: Dict[str, int] = {}
     for i, oid in enumerate(sorted(objects_meta.keys())):
         try:
             obj_name_to_idx[oid] = int(oid)
         except ValueError:
             obj_name_to_idx[oid] = i + 1
-            _log(f"[COSMO] Warning: object UID {oid!r} is not numeric; assigned sequential idx {i + 1}")
+            log(f"[COSMO] Warning: object UID {oid!r} is not numeric; assigned sequential idx {i + 1}")
 
-    # Handle objects referenced in frames but missing from the objects metadata section.
     # Assigning fallback IDs prevents None from propagating into int() calls later.
-    _all_frame_oids: set = {oid for fd in frames.values() for oid in fd["objects"]}
-    for oid in sorted(_all_frame_oids - set(obj_name_to_idx)):
+    all_frame_oids = {oid for fd in frames.values() for oid in fd["objects"]}
+    for oid in sorted(all_frame_oids - set(obj_name_to_idx)):
         try:
             obj_name_to_idx[oid] = int(oid)
         except ValueError:
             obj_name_to_idx[oid] = max(obj_name_to_idx.values(), default=0) + 1
-        _log(f"[COSMO] Warning: object {oid!r} found in frames but not in objects metadata; "
-             f"assigned id={obj_name_to_idx[oid]}, type defaults to 'other'")
+        log(f"[COSMO] Warning: object {oid!r} found in frames but not in objects metadata; "
+            f"assigned id={obj_name_to_idx[oid]}, type defaults to 'other'")
+    return obj_name_to_idx
 
-    csv_cols = [
-        "total_nanos", "idx", "x", "y", "z",
-        "vel_x", "vel_y", "vel_z",
-        "acc_x", "acc_y", "acc_z",
-        "length", "width", "height",
-        "roll", "pitch", "yaw",
-        "type", "subtype", "role",
-        "type_name", "subtype_name", "role_name",
-    ]
-    csv_rows: List[List[Any]] = []
 
-    # Per object: last (x, y, z, t_sec) and last velocity; kinematics use the real time
-    # step so frame gaps in an object's track don't inflate velocity.
-    last_positions: Dict[int, Tuple[float, float, float, float]] = {}
-    last_velocities: Dict[int, Tuple[float, float, float]] = {}
-    dt = 1.0 / fps if fps > 0 else 1.0 / 30.0
+def _frame_key(k: str) -> Tuple[int, str]:
+    try:
+        return int(k), k
+    except Exception:
+        return 0, k
 
-    env_sources = load_environment_sources(
-        root, 1.0 / dt, srt_path, timezone_name,
-        flight_record_path, flight_record_sequence, georef_data_path, _log,
-    )
-    if srt_path and env_sources.clock is not None:
-        dt = env_sources.clock.period_s
 
-    def _frame_key(k: str) -> Tuple[int, str]:
-        try:
-            return int(k), k
-        except Exception:
-            return 0, k
+def _sorted_frames(frames: Dict[str, Any]) -> List[Tuple[str, Tuple[int, str]]]:
+    return sorted(((fid, _frame_key(fid)) for fid in frames.keys()), key=lambda t: t[1])
 
-    sorted_frames = sorted(((fid, _frame_key(fid)) for fid in frames.keys()), key=lambda t: t[1])
-    if env_sources.srt_by_frame is not None and sorted_frames:
-        last_frame = sorted_frames[-1][1][0]
-        if last_frame not in env_sources.srt_by_frame:
-            _log(f"[COSMO] Warning: OpenLABEL frame {last_frame} has no SRT entry; "
-                 "is the SRT from the same (untrimmed) video?")
 
-    def _frame_number(seq_idx: int, frame_key: Tuple[int, str]) -> int:
-        """Video frame number; falls back to sequence position for non-numeric frame keys."""
-        if isinstance(frame_key[0], int) and (seq_idx == 0 or frame_key[0] != 0):
-            return frame_key[0]
-        return seq_idx
+def _frame_number(seq_idx: int, frame_key: Tuple[int, str]) -> int:
+    """Video frame number; falls back to sequence position for non-numeric frame keys."""
+    if isinstance(frame_key[0], int) and (seq_idx == 0 or frame_key[0] != 0):
+        return frame_key[0]
+    return seq_idx
 
-    def project_pixel_to_xyz(cx: float, cy: float) -> Tuple[float, float, float]:
-        if H is not None:
-            X, Y = apply_homography(H, cx, cy)
-            X, Y = post_transform_xy(
-                X, Y,
-                swap_xy=swap_xy,
-                flip_x=flip_x,
-                flip_y=flip_y,
-                yaw_offset_rad=yaw_offset_rad,
-                xy_offset=xy_offset,
-            )
+
+class _Geometry:
+    """Pixel box -> world position, heading and size, shared by every sample of one conversion."""
+
+    def __init__(self, H, corrector, defaults, towed_by, post, frame_off, heights=None):
+        self.H, self.corrector, self.defaults, self.towed_by = H, corrector, defaults, towed_by
+        self.post, self.frame_off = post, frame_off
+        self.heights = heights or {}  # oid -> (estimated height, sigma)
+
+    def world(self, oid: str, label_type: str, od: Dict[str, Any]) -> Dict[str, Any]:
+        """World state of one box (heading in the world frame before the yaw offset)."""
+        cx, cy, w_px, h_px, yaw_img = od["rbbox"]
+        H = self.H
+        heading_world = angle_wrap(-float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0))
+        h_veh = self.heights[oid][0] if oid in self.heights else _resolve_height(label_type, oid, self.towed_by,
+                                                                                 self.defaults)
+        oblique = None
+        if self.corrector is not None:
+            oblique = self.corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh,
+                                             effective_height=oid in self.heights)
+            X, Y = post_transform_xy(oblique.x, oblique.y, **self.post)
+            Z = oblique.z
+            length, width, height = oblique.length, oblique.width, oblique.height
+        else:
+            X, Y, Z = self._project(cx, cy)
+            if H is not None:
+                length, width = _footprint_from_homography(H, cx, cy, w_px, h_px, yaw_img, heading_world)
+                height = h_veh
+            else:
+                length, width, height = self._default_dims(label_type, w_px, h_px, oid)
+        off = self.frame_off
+        return {
+            "X": X - off[0], "Y": Y - off[1], "Z": Z - off[2],
+            "length": length, "width": width, "height": height,
+            "yaw": angle_wrap(heading_world + float(self.post["yaw_offset_rad"])),
+            "rbbox": od["rbbox"], "heading_world": heading_world, "h_veh": h_veh, "oblique": oblique,
+        }
+
+    def _project(self, cx: float, cy: float) -> Tuple[float, float, float]:
+        if self.H is not None:
+            X, Y = apply_homography(self.H, cx, cy)
+            X, Y = post_transform_xy(X, Y, **self.post)
             return X, Y, 0.0
         return cx * 0.01, cy * 0.01, 0.0
 
-    def estimate_dims(label_type: str, w_px: float, h_px: float, obj_uid: str = "") -> Tuple[float, float, float]:
-        dims = defaults.get(label_type.lower(), defaults.get("other", {}))
+    def _default_dims(self, label_type: str, w_px: float, h_px: float, obj_uid: str) -> Tuple[float, float, float]:
+        dims = self.defaults.get(label_type.lower(), self.defaults.get("other", {}))
         length = float(dims.get("length", w_px * 0.01))
         width = float(dims.get("width", h_px * 0.01))
-        height = _resolve_height(label_type, obj_uid, towed_by, defaults)
-        return length, width, height
+        return length, width, _resolve_height(label_type, obj_uid, self.towed_by, self.defaults)
 
-    def compute_kinematics(idx: int, X: float, Y: float, Z: float, t_sec: float) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
-        last_p = last_positions.get(idx)
-        step = t_sec - last_p[3] if last_p is not None else 0.0
-        if last_p is None or step <= 0:
-            vel = (0.0, 0.0, 0.0)
-            acc = (0.0, 0.0, 0.0)
-        else:
-            vel = ((X - last_p[0]) / step, (Y - last_p[1]) / step, (Z - last_p[2]) / step)
-            last_v = last_velocities.get(idx)
-            if last_v is None:
-                acc = (0.0, 0.0, 0.0)
-            else:
-                acc = ((vel[0] - last_v[0]) / step, (vel[1] - last_v[1]) / step, (vel[2] - last_v[2]) / step)
-        return vel, acc
 
-    def update_caches(idx: int, X: float, Y: float, Z: float, vel: Tuple[float, float, float], t_sec: float):
-        last_positions[idx] = (X, Y, Z, t_sec)
-        last_velocities[idx] = vel
+class _Classifier:
+    """OSI type/subtype/role codes per SAVANT label type."""
 
-    def _collect_all_dims() -> Dict[str, Tuple[float, float, float]]:
-        """Pass over all frames collecting per-object geo dims; return per-object mean."""
-        geo_sizes: Dict[str, List[Tuple[float, float, float]]] = {}
-        for frame_id, _ in sorted_frames:
-            frame = frames[frame_id]
-            for oid, od in frame["objects"].items():
-                cx, cy, w_px, h_px, yaw_img = od["rbbox"]
-                meta = objects_meta.get(oid, {})
-                label_type = meta.get("type", "other")
-                heading_world = angle_wrap(
-                    -float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0)
-                )
-                h_veh = _resolve_height(label_type, oid, towed_by, defaults)
-                if corrector is not None:
-                    _r = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)
-                    dims = (_r.length, _r.width, _r.height)
-                elif H is not None:
-                    lw = _footprint_from_homography(H, cx, cy, w_px, h_px, yaw_img, heading_world)
-                    dims = (lw[0], lw[1], h_veh)
-                else:
-                    dims = estimate_dims(label_type, w_px, h_px, oid)
-                geo_sizes.setdefault(oid, []).append(dims)
+    def __init__(self, mapper: OntologyMapper):
+        self.mapper = mapper
+        self.vt_name_to_code, self.vr_name_to_code, self.vt_default, self.vr_default = build_enum_code_maps()
+
+    def codes(self, label_type: str) -> Dict[str, Any]:
+        type_code, type_name_upper, subtype_upper = self.mapper.classify(label_type)
+        role_upper = self.mapper.role(label_type) or DEFAULT_VEHICLE_ROLE
         return {
-            oid: tuple(np.array(v).mean(axis=0).tolist())
-            for oid, v in geo_sizes.items()
+            "type_code": type_code, "type_name": type_name_upper,
+            "subtype_name": subtype_upper, "role_name": role_upper,
+            "vt_code": self.vt_name_to_code.get(subtype_upper, self.vt_default),
+            "vr_code": self.vr_name_to_code.get(role_upper, self.vr_default),
+            "vehicle_classification": (
+                make_vehicle_classification(subtype_upper, role_upper, self.vt_name_to_code,
+                                            self.vr_name_to_code, self.vt_default, self.vr_default)
+                if type_code == 2 else None),
         }
 
-    size_avg: Dict[str, Tuple[float, float, float]] = _collect_all_dims() if stabilize_size else {}
 
-    # ----------------------------
-    # MCAP writing (patched)
-    # ----------------------------
-    # IMPORTANT:
-    # Use betterosi.Writer as a context manager to ensure MCAP footer/summary are finalized properly. [1](https://deepwiki.com/ika-rwth-aachen/omega-prime/3.1-loading-and-saving-recordings)[4](https://ika-rwth-aachen.github.io/omega-prime/notebooks/tutorial/)
-    # Also write topic names without leading "/" to match common omega-prime usage.
+def _apply_mean_size(timeline: List[Dict[str, Any]]) -> None:
+    """Replace every sample's size by its object's mean over the whole recording."""
+    sizes: Dict[str, List[Tuple[float, float, float]]] = {}
+    for frame in timeline:
+        for s in frame["samples"]:
+            sizes.setdefault(s["oid"], []).append((s["length"], s["width"], s["height"]))
+    mean = {oid: tuple(np.array(v).mean(axis=0).tolist()) for oid, v in sizes.items()}
+    for frame in timeline:
+        for s in frame["samples"]:
+            s["length"], s["width"], s["height"] = mean[s["oid"]]
 
-    def _write_map(writer_mcap):
-        if odr_path and os.path.isfile(odr_path):
-            odr_xml = load_text(odr_path)
-            if strip_xodr_namespace:
-                odr_xml = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', "", odr_xml)
-            try:
-                map_msg = betterosi.MapAsamOpenDrive(open_drive_xml_content=odr_xml)
-            except TypeError:
-                map_msg = betterosi.MapAsamOpenDrive(content=odr_xml)
-            writer_mcap.add(map_msg, topic="ground_truth_map", log_time=0)
 
-    # File-level GroundTruth fields, resolved once before the frame loop (mcap path only).
-    _gt_proj_string = None
-    _gt_country_code = 0
+CSV_COLUMNS = [
+    "total_nanos", "idx", "x", "y", "z",
+    "vel_x", "vel_y", "vel_z",
+    "acc_x", "acc_y", "acc_z",
+    "length", "width", "height",
+    "roll", "pitch", "yaw",
+    "type", "subtype", "role",
+    "type_name", "subtype_name", "role_name",
+]
 
-    def _write_ground_truth(writer_mcap, t_sec: float, total_nanos: int, moving_objects_osi: List[Any], frame_no: int):
-        gt = betterosi.GroundTruth(
-            version=betterosi.InterfaceVersion(version_major=3, version_minor=7, version_patch=0),
-            timestamp=betterosi.Timestamp(
-                seconds=int(t_sec),
-                nanos=int((t_sec - int(t_sec)) * 1_000_000_000),
-            ),
-            moving_object=moving_objects_osi,
-            host_vehicle_id=betterosi.Identifier(value=0),
-        )
-        if _gt_proj_string:
-            gt.proj_string = _gt_proj_string
-        if _gt_country_code:
-            gt.country_code = _gt_country_code
-        env = build_environmental_conditions(betterosi, environment_fields(frame_no, env_sources))
-        if env is not None:
-            gt.environmental_conditions = env
-        if object_frame == "local" and any(frame_off):
-            # OSI: world = proj_frame_offset + osi, then proj_string. Records the
-            # local→projected-CRS shift so local coords stay fully georeferenced.
-            gt.proj_frame_offset = betterosi.GroundTruthProjFrameOffset(
-                position=betterosi.Vector3D(x=frame_off[0], y=frame_off[1], z=frame_off[2]),
-                yaw=0.0,
-            )
-        # Provide log_time explicitly; readers often build indices from it. [4](https://ika-rwth-aachen.github.io/omega-prime/notebooks/tutorial/)
-        writer_mcap.add(gt, topic="ground_truth", log_time=total_nanos)
 
-    # If MCAP enabled, write with context manager; else only build CSV rows
-    if write_mcap and betterosi is not None:
-        mcap_path = f"{out_prefix}.mcap"
-        os.makedirs(os.path.dirname(os.path.abspath(mcap_path)) or ".", exist_ok=True)
+def _write_csv(csv_path: str, timeline: List[Dict[str, Any]]) -> None:
+    rows = [
+        [f["total_nanos"], s["idx"], s["X"], s["Y"], s["Z"], *s["vel"], *s["acc"],
+         s["length"], s["width"], s["height"], 0.0, 0.0, s["yaw"],
+         s["type_code"], s["vt_code"], s["vr_code"], s["type_name"], s["subtype_name"], s["role_name"]]
+        for f in timeline for s in f["samples"]
+    ]
+    os.makedirs(os.path.dirname(os.path.abspath(csv_path)) or ".", exist_ok=True)
+    with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(CSV_COLUMNS)
+        for row in sorted(rows, key=lambda r: r[0]):
+            writer.writerow(row)
 
-        _gt_proj_string, _gt_lat, _gt_lon = _read_georef_geo(georef_data_path)
-        _gt_country_code = _resolve_country_code(country_code, _gt_lat, _gt_lon, _log)
 
-        with betterosi.Writer(mcap_path) as writer_mcap:
-            _write_map(writer_mcap)
+def _moving_object_type(type_code: int):
+    try:
+        return betterosi.MovingObjectType(type_code)
+    except Exception:
+        return {2: betterosi.MovingObjectType.VEHICLE, 3: betterosi.MovingObjectType.PEDESTRIAN,
+                4: betterosi.MovingObjectType.ANIMAL, 0: betterosi.MovingObjectType.UNKNOWN,
+                }.get(type_code, betterosi.MovingObjectType.OTHER)
 
-            for seq_idx, (frame_id, frame_key) in enumerate(sorted_frames):
-                frame = frames[frame_id]
 
-                frame_no = _frame_number(seq_idx, frame_key)
-                t_sec = frame_no * dt
-                total_nanos = to_nanos(t_sec)
-
-                moving_objects_osi = []
-
-                for oid, od in frame["objects"].items():
-                    cx, cy, w_px, h_px, yaw_img = od["rbbox"]
-                    idx = obj_name_to_idx.get(oid)
-
-                    meta = objects_meta.get(oid, {})
-                    label_type = meta.get("type", "other")
-                    type_code, type_name_upper, subtype_upper = mapper.classify(label_type)
-                    role_upper = mapper.role(label_type) or DEFAULT_VEHICLE_ROLE
-                    vt_code = vt_name_to_code.get(subtype_upper, vt_default)
-                    vr_code = vr_name_to_code.get(role_upper, vr_default)
-
-                    heading_world = angle_wrap(-float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0))
-                    h_veh = _resolve_height(label_type, oid, towed_by, defaults)
-                    if corrector is not None:
-                        _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)
-                        X, Y = post_transform_xy(
-                            _res.x, _res.y,
-                            swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y,
-                            yaw_offset_rad=yaw_offset_rad, xy_offset=xy_offset,
-                        )
-                        Z = _res.z
-                        length, width, height = _res.length, _res.width, _res.height
-                    else:
-                        X, Y, Z = project_pixel_to_xyz(cx, cy)
-                        if H is not None:
-                            length, width = _footprint_from_homography(
-                                H, cx, cy, w_px, h_px, yaw_img, heading_world
-                            )
-                            height = h_veh
-                        else:
-                            length, width, height = estimate_dims(label_type, w_px, h_px, oid)
-
-                    X, Y, Z = X - frame_off[0], Y - frame_off[1], Z - frame_off[2]
-
-                    if stabilize_size:
-                        length, width, height = size_avg.get(oid, (length, width, height))
-
-                    vel, acc = compute_kinematics(idx, X, Y, Z, t_sec)
-                    yaw = angle_wrap(heading_world + float(yaw_offset_rad))
-
-                    csv_rows.append([
-                        total_nanos, idx, X, Y, Z,
-                        vel[0], vel[1], vel[2],
-                        acc[0], acc[1], acc[2],
-                        length, width, height,
-                        0.0, 0.0, yaw,
-                        type_code, vt_code, vr_code,
-                        type_name_upper, subtype_upper, role_upper,
-                    ])
-
-                    # Create OSI MovingObject
-                    try:
-                        mo_type = betterosi.MovingObjectType(type_code)
-                    except Exception:
-                        if type_code == 2:
-                            mo_type = betterosi.MovingObjectType.VEHICLE
-                        elif type_code == 3:
-                            mo_type = betterosi.MovingObjectType.PEDESTRIAN
-                        elif type_code == 4:
-                            mo_type = betterosi.MovingObjectType.ANIMAL
-                        elif type_code == 0:
-                            mo_type = betterosi.MovingObjectType.UNKNOWN
-                        else:
-                            mo_type = betterosi.MovingObjectType.OTHER
-
-                    mo_kwargs = dict(
-                        id=betterosi.Identifier(value=int(idx)),
-                        type=mo_type,
-                        base=betterosi.BaseMoving(
-                            dimension=betterosi.Dimension3D(length=length, width=width, height=height),
-                            position=betterosi.Vector3D(x=X, y=Y, z=Z),
-                            orientation=betterosi.Orientation3D(roll=0.0, pitch=0.0, yaw=yaw),
-                            velocity=betterosi.Vector3D(x=vel[0], y=vel[1], z=vel[2]),
-                            acceleration=betterosi.Vector3D(x=acc[0], y=acc[1], z=acc[2]),
-                        ),
-                    )
-
-                    if type_code == 2:
-                        veh_class = make_vehicle_classification(
-                            subtype_upper, role_upper,
-                            vt_name_to_code, vr_name_to_code,
-                            vt_default, vr_default,
-                        )
-                        if veh_class is None:
-                            veh_class = betterosi.MovingObjectVehicleClassification()
-                        mo_kwargs["vehicle_classification"] = veh_class
-
-                    mo = betterosi.MovingObject(**mo_kwargs)
-                    moving_objects_osi.append(mo)
-
-                    update_caches(idx, X, Y, Z, vel, t_sec)
-
-                _write_ground_truth(writer_mcap, t_sec, total_nanos, moving_objects_osi, frame_no)
-
-    else:
-        # MCAP disabled or betterosi missing — still produce CSV rows
-        for seq_idx, (frame_id, frame_key) in enumerate(sorted_frames):
-            frame = frames[frame_id]
-            t_sec = _frame_number(seq_idx, frame_key) * dt
-            total_nanos = to_nanos(t_sec)
-
-            for oid, od in frame["objects"].items():
-                cx, cy, w_px, h_px, yaw_img = od["rbbox"]
-                idx = obj_name_to_idx.get(oid)
-
-                meta = objects_meta.get(oid, {})
-                label_type = meta.get("type", "other")
-                type_code, type_name_upper, subtype_upper = mapper.classify(label_type)
-                role_upper = mapper.role(label_type) or DEFAULT_VEHICLE_ROLE
-                vt_code = vt_name_to_code.get(subtype_upper, vt_default)
-                vr_code = vr_name_to_code.get(role_upper, vr_default)
-
-                heading_world = angle_wrap(-float(yaw_img) + (_h_rotation_angle(H, cx, cy) if H is not None else 0.0))
-                h_veh = _resolve_height(label_type, oid, towed_by, defaults)
-                if corrector is not None:
-                    _res = corrector.correct(cx, cy, w_px, h_px, yaw_img, label_type, heading_world, h_veh)
-                    X, Y = post_transform_xy(
-                        _res.x, _res.y,
-                        swap_xy=swap_xy, flip_x=flip_x, flip_y=flip_y,
-                        yaw_offset_rad=yaw_offset_rad, xy_offset=xy_offset,
-                    )
-                    Z = _res.z
-                    length, width, height = _res.length, _res.width, _res.height
-                else:
-                    X, Y, Z = project_pixel_to_xyz(cx, cy)
-                    if H is not None:
-                        length, width = _footprint_from_homography(
-                            H, cx, cy, w_px, h_px, yaw_img, heading_world
-                        )
-                        height = h_veh
-                    else:
-                        length, width, height = estimate_dims(label_type, w_px, h_px, oid)
-
-                X, Y, Z = X - frame_off[0], Y - frame_off[1], Z - frame_off[2]
-
-                if stabilize_size:
-                    length, width, height = size_avg.get(oid, (length, width, height))
-
-                vel, acc = compute_kinematics(idx, X, Y, Z, t_sec)
-                yaw = angle_wrap(heading_world + float(yaw_offset_rad))
-
-                csv_rows.append([
-                    total_nanos, idx, X, Y, Z,
-                    vel[0], vel[1], vel[2],
-                    acc[0], acc[1], acc[2],
-                    length, width, height,
-                    0.0, 0.0, yaw,
-                    type_code, vt_code, vr_code,
-                    type_name_upper, subtype_upper, role_upper,
-                ])
-
-                update_caches(idx, X, Y, Z, vel, t_sec)
-
-    # Write CSV
-    if write_csv:
-        csv_path = f"{out_prefix}.csv"
-        os.makedirs(os.path.dirname(os.path.abspath(csv_path)) or ".", exist_ok=True)
-        with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(csv_cols)
-            for row in sorted(csv_rows, key=lambda r: r[0]):
-                writer.writerow(row)
-
-    print(
-        "Done. Wrote: "
-        f"{'[MCAP ' + out_prefix + '.mcap] ' if (write_mcap and betterosi is not None) else ''}"
-        f"{'[CSV ' + out_prefix + '.csv] ' if write_csv else ''}"
+def _base_moving(s: Dict[str, Any]):
+    vel, acc = s["vel"], s["acc"]
+    return betterosi.BaseMoving(
+        dimension=betterosi.Dimension3D(length=s["length"], width=s["width"], height=s["height"]),
+        position=betterosi.Vector3D(x=s["X"], y=s["Y"], z=s["Z"]),
+        orientation=betterosi.Orientation3D(roll=0.0, pitch=0.0, yaw=s["yaw"]),
+        velocity=betterosi.Vector3D(x=vel[0], y=vel[1], z=vel[2]),
+        acceleration=betterosi.Vector3D(x=acc[0], y=acc[1], z=acc[2]),
     )
-    return 1.0 / dt
+
+
+def _moving_object(s: Dict[str, Any]):
+    mo_kwargs = dict(id=betterosi.Identifier(value=int(s["idx"])), type=_moving_object_type(s["type_code"]),
+                     base=_base_moving(s))
+    if s["type_code"] == 2:
+        mo_kwargs["vehicle_classification"] = (
+            s["vehicle_classification"] or betterosi.MovingObjectVehicleClassification())
+    return betterosi.MovingObject(**mo_kwargs)
+
+
+def _write_mcap(
+    mcap_path: str, timeline: List[Dict[str, Any]], odr_path: Optional[str], strip_xodr_namespace: bool,
+    georef_data_path: Optional[str], country_code: Optional[int], env_sources: EnvironmentSources,
+    local_frame_off: Optional[Tuple[float, float, float]], log,
+    sensor_datum: Optional[np.ndarray] = None, sensor_data: bool = False,
+) -> None:
+    """OSI GroundTruth per frame plus the OpenDRIVE map, and optionally a SensorData topic.
+
+    betterosi.Writer is used as a context manager so the MCAP footer/summary are finalized; topic
+    names have no leading "/" to match common omega-prime usage.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(mcap_path)) or ".", exist_ok=True)
+    proj_string, lat, lon = _read_georef_geo(georef_data_path)
+    country = _resolve_country_code(country_code, lat, lon, log)
+    with betterosi.Writer(mcap_path) as writer_mcap:
+        if odr_path and os.path.isfile(odr_path):
+            writer_mcap.add(_map_message(odr_path, strip_xodr_namespace), topic="ground_truth_map", log_time=0)
+        for frame in timeline:
+            gt = _ground_truth(frame, proj_string, country, env_sources, local_frame_off)
+            # Provide log_time explicitly; readers often build indices from it
+            writer_mcap.add(gt, topic="ground_truth", log_time=frame["total_nanos"])
+            if sensor_data:
+                detected = [detected_object(betterosi, s, _base_moving(s), _moving_object_type(s["type_code"]),
+                                            sensor_datum) for s in frame["samples"]]
+                message = sensor_data_message(betterosi, frame, _osi_timestamp(frame["t_sec"]), detected)
+                writer_mcap.add(message, topic=SENSOR_DATA_TOPIC, log_time=frame["total_nanos"])
+
+
+def _map_message(odr_path: str, strip_xodr_namespace: bool):
+    odr_xml = load_text(odr_path)
+    if strip_xodr_namespace:
+        odr_xml = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', "", odr_xml)
+    try:
+        return betterosi.MapAsamOpenDrive(open_drive_xml_content=odr_xml)
+    except TypeError:
+        return betterosi.MapAsamOpenDrive(content=odr_xml)
+
+
+def _osi_timestamp(t_sec: float):
+    return betterosi.Timestamp(seconds=int(t_sec), nanos=int((t_sec - int(t_sec)) * 1_000_000_000))
+
+
+def _ground_truth(frame: Dict[str, Any], proj_string, country: int, env_sources: EnvironmentSources,
+                  local_frame_off: Optional[Tuple[float, float, float]]):
+    gt = betterosi.GroundTruth(
+        version=betterosi.InterfaceVersion(version_major=3, version_minor=7, version_patch=0),
+        timestamp=_osi_timestamp(frame["t_sec"]),
+        moving_object=[_moving_object(s) for s in frame["samples"]],
+        host_vehicle_id=betterosi.Identifier(value=0),
+    )
+    if proj_string:
+        gt.proj_string = proj_string
+    if country:
+        gt.country_code = country
+    env = build_environmental_conditions(betterosi, environment_fields(frame["frame_no"], env_sources))
+    if env is not None:
+        gt.environmental_conditions = env
+    if local_frame_off is not None and any(local_frame_off):
+        # OSI: world = proj_frame_offset + osi, then proj_string. Records the local→projected-CRS
+        # shift so local coords stay fully georeferenced.
+        gt.proj_frame_offset = betterosi.GroundTruthProjFrameOffset(
+            position=betterosi.Vector3D(x=local_frame_off[0], y=local_frame_off[1], z=local_frame_off[2]),
+            yaw=0.0,
+        )
+    return gt

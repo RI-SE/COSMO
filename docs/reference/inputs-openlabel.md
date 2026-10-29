@@ -16,11 +16,21 @@ If present under `openlabel.objects`, COSMO uses `type` (an ontology class such 
 Pedestrian). It is mapped to OSI type, vehicle classification and role; see the [object class table](osi-mapping.md#object-classes). Ontology URLs in `openlabel.ontologies` extend the mapping (needs `rdflib`).
 
 ## Optional weather annotation
-`openlabel.contexts[*]` of type `WeatherContext` (per frame interval) and `openlabel.tags[*]` of type
-`WeatherTag` (whole sequence) fill OSI precipitation, fog and cloud cover. Used fields:
-`precipitation`, `precipitation_intensity`, `visibility_km`, `cloud_cover`. Other tags (road, junction,
-traffic, structures, notes) are not exported. Mapping: [environmental conditions](osi-mapping.md#environmental-conditions-groundtruthenvironmental_conditions-mcap-only).
+Weather from SAVANT markit's VLM analysis fills OSI precipitation, fog and cloud cover. Used fields:
+`precipitation`, `precipitation_intensity`, `visibility_km` (newer files: `environmentVisibilityValue`),
+`cloud_cover`. Both SAVANT formats are read, by field name whatever the tag type:
+- before SAVANT 2.5: one `WeatherTag` (whole sequence) and `WeatherContext`s (frame intervals), with explicit
+  `"none"` values;
+- SAVANT ≥ 2.5: one tag per value typed by its scenario-ontology class (`WeatherRain`, `CloudinessOvercast`,
+  `EnvironmentVisibility`, …), and precipitation contexts per frame interval. Values without a class (`unknown`)
+  are not written, so frames outside every precipitation context are left unset (unknown). Dry intervals are
+  `WeatherNoPrecipitation` from scenario ontology 2.1.0 on; files made with 2.0.0 have no dry contexts at all.
+
+Contexts override tags for their frames. When a field appears in several tags, a person's edit wins, then the
+higher VLM agreement, then the higher confidence. Other tags (road, junction, traffic, structures, notes) are not
+exported to OSI; they are copied to the companion OpenLABEL. Mapping: [environmental conditions](osi-mapping.md#environmental-conditions-groundtruthenvironmental_conditions-mcap-only).
 
 ## Confidence
-COSMO can read confidence from:
-`object_data.vec.confidence.val` (if present).
+COSMO reads the per-box confidence from the `confidence` entry of `object_data.vec`, a list of
+`{"name": ..., "val": [...]}` entries with the newest value first, as SAVANT writes it. It is kept
+for future use and does not affect the output yet. A missing entry means unknown, not 1.0.
