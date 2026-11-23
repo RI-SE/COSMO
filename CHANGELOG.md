@@ -7,6 +7,13 @@ All notable changes to COSMO are documented here. Format follows
 > (commits where `version` changed in `pyproject.toml`, and the commits between them). Dates are those
 > commit dates. They are best-effort summaries and may be incomplete.
 
+## [Unreleased]
+
+### Changed
+- Companion OpenLABEL (`*.companion.json`) writes `schema_version` `1.0.0` (ASAM OpenLABEL) instead of `1.1`: it uses cuboids and a world coordinate system, which are outside the SAVANT subset. It validates against the bundled OpenLABEL schema (new test).
+- `cosmo-correct` output: pixel output (default) is stamped as SAVANT OpenLABEL schema `1.2.0`, geo/both output (cuboids, coordinate system) as OpenLABEL `1.0.0`; object-level `vec` values are written as lists (older SAVANT files had the marker `description` as a scalar). Input of any version is read as before.
+- `schemas/SAVANT_openlabel_subset.schema.json` updated to SAVANT's schema 1.2.0 (reference copy; not used by code).
+
 ## [0.7.0] – 2026-10-29
 
 Uncertainty tracking, following [scenario-uncertainty](https://github.com/das-rise/scenario-uncertainty) 0.1.0

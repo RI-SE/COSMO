@@ -9,17 +9,32 @@
         "metadata": {
           "type": "object",
           "properties": {
-            "schema_version": { "type": "string", "const" : "0.1" },
-            "tagged_file": { "type": "string" },
-            "annotator": { "type": "string" }
+            "schema_version": {
+              "type": "string",
+              "const": "1.2.0"
+            },
+            "tagged_file": {
+              "type": "string"
+            },
+            "annotator": {
+              "type": "string"
+            }
           },
-          "required": ["schema_version", "tagged_file", "annotator"]
+          "required": [
+            "schema_version",
+            "tagged_file",
+            "annotator"
+          ]
         },
         "ontologies": {
           "type": "object",
           "patternProperties": {
-            "^[0-9]+$": { "type": "string", "format": "uri" }
-          }
+            "^[0-9]+$": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "additionalProperties": false
         },
         "objects": {
           "type": "object",
@@ -27,24 +42,74 @@
             "^[0-9]+$": {
               "type": "object",
               "properties": {
-                "name": { "type": "string" },
-                "type": { "type": "string" },
-                "ontology_uid": { "type": ["string"] },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "ontology_uid": {
+                  "type": "string"
+                },
                 "frame_intervals": {
                   "type": "array",
                   "items": {
                     "type": "object",
                     "properties": {
-                      "frame_start": { "type": "integer" },
-                      "frame_end": { "type": "integer" }
+                      "frame_start": {
+                        "type": "integer"
+                      },
+                      "frame_end": {
+                        "type": "integer"
+                      }
                     },
-                    "required": ["frame_start", "frame_end"]
+                    "required": [
+                      "frame_start",
+                      "frame_end"
+                    ],
+                    "additionalProperties": false
                   }
+                },
+                "object_data": {
+                  "type": "object",
+                  "properties": {
+                    "vec": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "val": {
+                            "type": "array",
+                            "items": {
+                              "type": [
+                                "number",
+                                "string"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "val"
+                        ]
+                      }
+                    }
+                  },
+                  "additionalProperties": false
                 }
               },
-              "required": ["name", "type", "ontology_uid"]
+              "required": [
+                "name",
+                "type",
+                "ontology_uid"
+              ],
+              "additionalProperties": false
             }
-          }
+          },
+          "additionalProperties": false
         },
         "actions": {
           "type": "object",
@@ -52,24 +117,381 @@
             "^[0-9]+$": {
               "type": "object",
               "properties": {
-                "name": { "type": "string" },
-                "type": { "type": "string" },
-                "ontology_uid": { "type": ["string", "number"] },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "ontology_uid": {
+                  "type": "string"
+                },
                 "frame_intervals": {
                   "type": "array",
                   "items": {
                     "type": "object",
                     "properties": {
-                      "frame_start": { "type": "integer" },
-                      "frame_end": { "type": "integer" }
+                      "frame_start": {
+                        "type": "integer"
+                      },
+                      "frame_end": {
+                        "type": "integer"
+                      }
                     },
-                    "required": ["frame_start", "frame_end"]
+                    "required": [
+                      "frame_start",
+                      "frame_end"
+                    ],
+                    "additionalProperties": false
                   }
                 }
               },
-              "required": ["name", "type", "ontology_uid"]
+              "required": [
+                "name",
+                "type",
+                "ontology_uid"
+              ],
+              "additionalProperties": false
             }
-          }
+          },
+          "additionalProperties": false
+        },
+        "relations": {
+          "type": "object",
+          "patternProperties": {
+            "^[0-9]+$": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "ontology_uid": {
+                  "type": "string"
+                },
+                "frame_intervals": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "frame_start": {
+                        "type": "integer"
+                      },
+                      "frame_end": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "frame_start",
+                      "frame_end"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "rdf_subjects": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "object",
+                          "action",
+                          "event",
+                          "context"
+                        ]
+                      },
+                      "uid": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "uid"
+                    ]
+                  }
+                },
+                "rdf_objects": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "object",
+                          "action",
+                          "event",
+                          "context"
+                        ]
+                      },
+                      "uid": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "uid"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "ontology_uid",
+                "rdf_subjects",
+                "rdf_objects"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "contexts": {
+          "type": "object",
+          "description": "Nonspatial/temporal annotations for scene context (weather, road type, etc.)",
+          "patternProperties": {
+            "^[0-9]+$": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "ontology_uid": {
+                  "type": "string"
+                },
+                "frame_intervals": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "frame_start": {
+                        "type": "integer"
+                      },
+                      "frame_end": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "frame_start",
+                      "frame_end"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "context_data": {
+                  "type": "object",
+                  "properties": {
+                    "boolean": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "val": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "val"
+                        ]
+                      }
+                    },
+                    "num": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "val": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "val"
+                        ]
+                      }
+                    },
+                    "text": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "val": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "val"
+                        ]
+                      }
+                    },
+                    "vec": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "val": {
+                            "type": "array",
+                            "items": {
+                              "type": [
+                                "number",
+                                "string"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "val"
+                        ]
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "name",
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "tags": {
+          "type": "object",
+          "description": "Scenario-level metadata tags",
+          "patternProperties": {
+            "^[0-9]+$": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "ontology_uid": {
+                  "type": "string"
+                },
+                "tag_data": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "boolean": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "val": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "val"
+                            ]
+                          }
+                        },
+                        "num": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "val": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "val"
+                            ]
+                          }
+                        },
+                        "text": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "val": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "val"
+                            ]
+                          }
+                        },
+                        "vec": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "val": {
+                                "type": "array",
+                                "items": {
+                                  "type": [
+                                    "number",
+                                    "string"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "val"
+                            ]
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "ontology_uid",
+                "type"
+              ]
+            }
+          },
+          "additionalProperties": false
         },
         "frames": {
           "type": "object",
@@ -91,13 +513,22 @@
                               "items": {
                                 "type": "object",
                                 "properties": {
-                                  "name": { "type": "string" },
+                                  "name": {
+                                    "type": "string"
+                                  },
                                   "val": {
                                     "type": "array",
-                                    "items": { "type": ["number", "string"] }
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "minItems": 5,
+                                    "maxItems": 5
                                   }
                                 },
-                                "required": ["name", "val"]
+                                "required": [
+                                  "name",
+                                  "val"
+                                ]
                               }
                             },
                             "vec": {
@@ -105,31 +536,111 @@
                               "items": {
                                 "type": "object",
                                 "properties": {
-                                  "name": { "type": "string" },
+                                  "name": {
+                                    "type": "string"
+                                  },
                                   "val": {
                                     "type": "array",
-                                    "items": { "type": ["number", "string"] }
+                                    "items": {
+                                      "type": [
+                                        "number",
+                                        "string"
+                                      ]
+                                    }
                                   }
                                 },
-                                "required": ["name", "val"]
+                                "required": [
+                                  "name",
+                                  "val"
+                                ]
                               }
                             }
                           },
-                          "required": ["rbbox", "vec"]
+                          "required": [
+                            "rbbox",
+                            "vec"
+                          ],
+                          "additionalProperties": false
                         }
                       },
-                      "required": ["object_data"]
+                      "required": [
+                        "object_data"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "frame_properties": {
+                  "type": "object",
+                  "properties": {
+                    "timestamp": {
+                      "type": "string",
+                      "description": "Video timestamp for this frame (HH:MM:SS.ffffff)"
+                    },
+                    "review": {
+                      "type": "object",
+                      "description": "Key-frame review by edit: every box in the frame was checked by a person",
+                      "properties": {
+                        "annotator": {
+                          "type": "string"
+                        },
+                        "time": {
+                          "type": "string",
+                          "description": "ISO 8601"
+                        }
+                      },
+                      "required": [
+                        "annotator"
+                      ]
                     }
                   }
                 }
               },
-              "required": ["objects"]
+              "required": [
+                "objects"
+              ],
+              "additionalProperties": false
             }
+          },
+          "additionalProperties": false
+        },
+        "streams": {
+          "type": "object",
+          "description": "Recording streams (e.g. camera sources)",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "uri": {
+                "type": "string"
+              },
+              "stream_properties": {
+                "type": "object"
+              }
+            },
+            "additionalProperties": false
           }
         }
       },
-      "required": ["metadata", "ontologies", "objects", "actions", "frames"]
+      "required": [
+        "metadata",
+        "ontologies",
+        "objects",
+        "actions",
+        "relations",
+        "frames"
+      ],
+      "additionalProperties": false
     }
   },
-  "required": ["openlabel"]
+  "required": [
+    "openlabel"
+  ],
+  "additionalProperties": false
 }

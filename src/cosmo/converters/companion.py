@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from scenario_uncertainty.core import Q
 
+from cosmo.converters.openlabel_version import OPENLABEL_SCHEMA_VERSION
 from cosmo.converters.quality import REVIEWED_ORIGINS, SYNTHESIZED_ORIGINS
 
 PROFILE = "world"
@@ -158,7 +159,8 @@ def build(root_in: Dict[str, Any], timeline: List[Dict[str, Any]], quality: Dict
           heights: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The companion document; quality = run_quality(...)."""
     osi = {s["oid"]: s for f in timeline for s in f["samples"]}
-    metadata = {"schema_version": "1.1", "annotator": tool, "quality": quality}
+    # Cuboids and a world coordinate system are outside the SAVANT subset: plain OpenLABEL
+    metadata = {"schema_version": OPENLABEL_SCHEMA_VERSION, "annotator": tool, "quality": quality}
     if (root_in.get("metadata") or {}).get("tagged_file"):
         metadata["tagged_file"] = root_in["metadata"]["tagged_file"]
     cs = {"type": "geo", "parent": ""}
