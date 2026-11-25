@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from scenario_uncertainty.core import Q
 
-from cosmo.converters.openlabel_version import OPENLABEL_SCHEMA_VERSION
+from cosmo.converters.openlabel_version import SAVANT_SCHEMA_VERSION
 from cosmo.converters.quality import REVIEWED_ORIGINS, SYNTHESIZED_ORIGINS
 
 PROFILE = "world"
@@ -25,7 +25,9 @@ QUALITY_SPEC = "scenario-uncertainty/0.1"
 COMPANION_SUFFIX = ".companion.json"
 WORLD_CS = "world"
 # Sections copied from the input as they are
-COPIED_SECTIONS = ("tags", "contexts", "relations", "actions", "events", "streams", "ontologies")
+# Sections the SAVANT schema has (no events: neither SAVANT nor the schema use them)
+COPIED_SECTIONS = ("tags", "contexts", "relations", "actions", "streams", "ontologies")
+REQUIRED_SECTIONS = ("ontologies", "actions", "relations", "frames")
 
 
 def q(value, unit: str, stat: str, level: str, basis: str, **extra) -> Dict[str, Any]:
@@ -159,8 +161,7 @@ def build(root_in: Dict[str, Any], timeline: List[Dict[str, Any]], quality: Dict
           heights: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The companion document; quality = run_quality(...)."""
     osi = {s["oid"]: s for f in timeline for s in f["samples"]}
-    # Cuboids and a world coordinate system are outside the SAVANT subset: plain OpenLABEL
-    metadata = {"schema_version": OPENLABEL_SCHEMA_VERSION, "annotator": tool, "quality": quality}
+    metadata = {"schema_version": SAVANT_SCHEMA_VERSION, "annotator": tool, "quality": quality}
     if (root_in.get("metadata") or {}).get("tagged_file"):
         metadata["tagged_file"] = root_in["metadata"]["tagged_file"]
     cs = {"type": "geo", "parent": ""}
@@ -172,6 +173,8 @@ def build(root_in: Dict[str, Any], timeline: List[Dict[str, Any]], quality: Dict
     for key in COPIED_SECTIONS:
         if root_in.get(key):
             out[key] = root_in[key]
+    for key in REQUIRED_SECTIONS:  # the SAVANT schema requires them, even when empty
+        out.setdefault(key, {})
     if frames:
         for f in timeline:
             for s in f["samples"]:

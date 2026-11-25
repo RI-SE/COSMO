@@ -11,7 +11,6 @@ import pytest
 from cosmo.converters.kinematics import rts_smooth, smooth_tracks
 from cosmo.converters.openlabel_to_omega import convert_openlabel_to_omega
 from cosmo.converters.openlabel_version import (
-    OPENLABEL_SCHEMA_VERSION,
     SAVANT_SCHEMA_VERSION,
     stamp_output,
 )
@@ -86,8 +85,10 @@ def _convert(tmp_path: Path, **kwargs):
         "rbbox": [{"name": "shape", "val": [100 + 5 * f, 100, 40, 10, 0.0]}],
         "vec": [{"name": "annotator", "val": ["markit_yolo"]}, {"name": "p_exist", "val": [0.8]}]}}}}
         for f in range(10)}
-    openlabel = {"openlabel": {"metadata": {"schema_version": "1.1"},
-                               "objects": {"1": {"name": "car1", "type": "car"}}, "frames": boxes,
+    openlabel = {"openlabel": {"metadata": {"schema_version": "1.1", "tagged_file": "clip.mp4", "annotator": "markit"},
+                               "ontologies": {"0": "https://ri-se.github.io/SAVANT/ontology/savant#"},
+                               "objects": {"1": {"name": "car1", "type": "car", "ontology_uid": "0"}},
+                               "frames": boxes,
                                "tags": {"0": {"type": "WeatherRain", "ontology_uid": "1", "tag_data": {}}}}}
     (tmp_path / "ol.json").write_text(json.dumps(openlabel))
     (tmp_path / "calib.json").write_text(json.dumps({"fps": 10.0, "homography": H_SCALE.tolist()}))
@@ -114,19 +115,25 @@ def test_companion_variants(tmp_path):
 
 
 
-def test_companion_is_valid_openlabel(tmp_path):
+@pytest.mark.parametrize("frames", [True, False])
+def test_companion_follows_the_savant_schema(tmp_path, frames):
     jsonschema = pytest.importorskip("jsonschema")
-    _convert(tmp_path, write_mcap=False, companion_path=str(tmp_path / "out.companion.json"), companion_frames=True)
+    _convert(tmp_path, write_mcap=False, companion_path=str(tmp_path / "out.companion.json"), companion_frames=frames)
     doc = json.loads((tmp_path / "out.companion.json").read_text())
-    assert doc["openlabel"]["metadata"]["schema_version"] == OPENLABEL_SCHEMA_VERSION
-    schema = json.loads((SCHEMAS / "openlabel_json_schema.json").read_text())
-    jsonschema.validate(doc, schema)
+    assert doc["openlabel"]["metadata"]["schema_version"] == SAVANT_SCHEMA_VERSION
+    savant = json.loads((SCHEMAS / "SAVANT_openlabel_subset.schema.json").read_text())
+    assert savant["properties"]["openlabel"]["properties"]["metadata"]["properties"]["schema_version"]["const"] \
+        == SAVANT_SCHEMA_VERSION
+    jsonschema.validate(doc, savant)
+    # the SAVANT subset is OpenLABEL apart from its version string
+    doc["openlabel"]["metadata"]["schema_version"] = "1.0.0"
+    jsonschema.validate(doc, json.loads((SCHEMAS / "openlabel_json_schema.json").read_text()))
 
 
 def test_stamp_output_sets_version_and_lists_object_vecs():
     root = {"metadata": {"schema_version": "1.1"}, "objects": {"0": {"object_data": {"vec": [
         {"name": "description", "val": "Saro_aruco"}, {"name": "size_step", "val": [10]}]}}}}
-    stamp_output(root, SAVANT_SCHEMA_VERSION)
+    stamp_output(root)
     assert root["metadata"]["schema_version"] == SAVANT_SCHEMA_VERSION
     assert root["objects"]["0"]["object_data"]["vec"] == [
         {"name": "description", "val": ["Saro_aruco"]}, {"name": "size_step", "val": [10]}]

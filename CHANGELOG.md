@@ -7,12 +7,13 @@ All notable changes to COSMO are documented here. Format follows
 > (commits where `version` changed in `pyproject.toml`, and the commits between them). Dates are those
 > commit dates. They are best-effort summaries and may be incomplete.
 
-## [Unreleased]
+## [0.8.0] – 2026-11-24
 
 ### Changed
-- Companion OpenLABEL (`*.companion.json`) writes `schema_version` `1.0.0` (ASAM OpenLABEL) instead of `1.1`: it uses cuboids and a world coordinate system, which are outside the SAVANT subset. It validates against the bundled OpenLABEL schema (new test).
-- `cosmo-correct` output: pixel output (default) is stamped as SAVANT OpenLABEL schema `1.2.0`, geo/both output (cuboids, coordinate system) as OpenLABEL `1.0.0`; object-level `vec` values are written as lists (older SAVANT files had the marker `description` as a scalar). Input of any version is read as before.
-- `schemas/SAVANT_openlabel_subset.schema.json` updated to SAVANT's schema 1.2.0 (reference copy; not used by code).
+- Every OpenLABEL file COSMO writes now follows the **SAVANT OpenLABEL schema 1.3.0** (SAVANT ≥ 2.6.6), which covers COSMO's cuboids, world coordinate system and per-object `num`/`text`: the companion (`*.companion.json`, was `schema_version` `1.1`) and `cosmo-correct` output in all `--output-coords` modes. One constant, `cosmo.converters.openlabel_version.SAVANT_SCHEMA_VERSION`.
+- The companion always writes `ontologies`, `actions`, `relations` and `frames` (empty if there is nothing), which the schema requires, and no longer copies `events` (not in the schema; SAVANT does not write them).
+- Object-level `vec` values are written as lists; older SAVANT files (1.1) had the marker `description` as a scalar. Input of any schema version is read as before.
+- `schemas/SAVANT_openlabel_subset.schema.json` is SAVANT's schema 1.3.0; tests validate the companion against it (and against the bundled ASAM OpenLABEL schema).
 
 ## [0.7.0] – 2026-10-29
 

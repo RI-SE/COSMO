@@ -21,11 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from cosmo.converters.openlabel_version import (
-    OPENLABEL_SCHEMA_VERSION,
-    SAVANT_SCHEMA_VERSION,
-    stamp_output,
-)
+from cosmo.converters.openlabel_version import stamp_output
 
 _COORD_SYSTEM_NAME = "world"
 
@@ -513,8 +509,7 @@ def main(argv=None) -> int:
                 vec_list.append({"name": "size_mean_geo", "val": list(geo_mean[oid])})
                 vec_list.append({"name": "size_std_geo", "val": list(geo_std[oid])})
 
-    # Pixel output stays a SAVANT annotation; geo output (cuboids, coordinate system) is plain OpenLABEL
-    stamp_output(root, SAVANT_SCHEMA_VERSION if output_coords == "pixel" else OPENLABEL_SCHEMA_VERSION)
+    stamp_output(root)  # current SAVANT schema (covers geo cuboids and the coordinate system too)
 
     # Write output
     end_time = datetime.now(timezone.utc)
