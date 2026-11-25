@@ -21,6 +21,8 @@ from pathlib import Path
 
 import numpy as np
 
+from cosmo.converters.openlabel_version import stamp_output
+
 _COORD_SYSTEM_NAME = "world"
 
 # ---------------------------------------------------------------------------
@@ -506,6 +508,8 @@ def main(argv=None) -> int:
                 vec_list.append({"name": "size_std_pixel", "val": list(px_std.get(oid, []))})
                 vec_list.append({"name": "size_mean_geo", "val": list(geo_mean[oid])})
                 vec_list.append({"name": "size_std_geo", "val": list(geo_std[oid])})
+
+    stamp_output(root)  # current SAVANT schema (covers geo cuboids and the coordinate system too)
 
     # Write output
     end_time = datetime.now(timezone.utc)
